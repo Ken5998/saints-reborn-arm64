@@ -1,0 +1,25 @@
+saints-reborn-arm64
+https://github.com/Ken5998/saints-reborn-arm64
+
+Copyright 2026 Kenan Kasumović
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository ports Saints Reborn by Whompay to ARM64 Linux.
+Saints Reborn: https://github.com/whompay/SaintsReborn
+Copyright 2026 Whompay, Apache License 2.0.
+The patches in patches/ change Saints Reborn and its patch of the ReXGlue SDK;
+the scripts download both from their own repositories at build time.
+
+ReXGlue SDK: https://github.com/rexglue/rexglue-sdk
+Copyright (c) 2026, Tom Clay, with portions derived from the Xenia project
+(Copyright (c) 2022, Ben Vanik and Xenia project contributors).
+
+The toolchain setup follows pinyon-shift-arm64
+(https://github.com/Ken5998/pinyon-shift-arm64) and uses the ARM64 sysroot it
+publishes.
+
+"Saints Row" is a trademark of its owner. Neither this repository nor Saints
+Reborn is affiliated with or endorsed by the rights holders. Nothing here
+contains the game or any file extracted or generated from it, and nothing
+built from it may be published here.
