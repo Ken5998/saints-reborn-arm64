@@ -1,0 +1,61 @@
+name: ARM64 SDK
+
+# Builds the ReXGlue SDK the way Saints Reborn uses it (its pinned commit and
+# patches/rexglue-sdk.patch, plus patches/sdk/) for linux-arm64 with the
+# Vulkan backend, two ways: natively on GitHub's ARM64 runner in a bare
+# Fedora 44 (the release ArmadaOS is built on) with only the pinned toolchain,
+# as a handheld would, and cross-compiled on x86-64 Ubuntu as a PC or WSL
+# would. No game files are involved.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Saints Reborn commit or branch (default the one in upstream.json)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 120
+    steps:
+      # No compilers, CMake or development files, as on ArmadaOS: the pinned
+      # toolchain and sysroot bring them.
+      - name: Install git, Python and the download tools
+        run: dnf install -y --setopt=install_weak_deps=False git python3 curl tar xz file
+      - uses: actions/checkout@v5
+      - name: Fetch the pinned toolchain
+        run: scripts/fetch-toolchain.sh "$RUNNER_TEMP/toolchain"
+      - name: Check out Saints Reborn and the patched SDK
+        env:
+          REF: ${{ inputs.ref }}
+        run: scripts/prepare-sdk.sh "$RUNNER_TEMP/work" ${REF:+"$REF"}
+      - name: Build the SDK
+        run: scripts/build-sdk.sh "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/toolchain"
+
+  cross:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install CMake, Ninja, wayland-scanner and qemu
+        run: sudo apt-get update -q && sudo apt-get install -y -q cmake ninja-build pkgconf libwayland-bin qemu-user-static file
+      - uses: actions/checkout@v5
+      - name: Fetch the pinned toolchain
+        run: scripts/fetch-toolchain.sh "$RUNNER_TEMP/toolchain"
+      - name: Check out Saints Reborn and the patched SDK
+        env:
+          REF: ${{ inputs.ref }}
+        run: scripts/prepare-sdk.sh "$RUNNER_TEMP/work" ${REF:+"$REF"}
+      - name: Build the SDK
+        run: scripts/build-sdk.sh "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/toolchain"

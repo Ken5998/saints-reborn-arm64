@@ -1,0 +1,32 @@
+{
+  "llvm": {
+    "version": "20.1.8",
+    "aarch64": {
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-Linux-ARM64.tar.xz",
+      "sha256": "B855CC17D935FDD83DA82206B7A7CFC680095EFD1E9E8182C4A05E761958BEF8"
+    },
+    "x86_64": {
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-Linux-X64.tar.xz",
+      "sha256": "1EAD36B3DFCB774B57BE530DF42BEC70AB2D239FBCE9889447C7A29A4DDC1AE6"
+    }
+  },
+  "cmake": {
+    "version": "3.31.10",
+    "aarch64": {
+      "url": "https://github.com/Kitware/CMake/releases/download/v3.31.10/cmake-3.31.10-linux-aarch64.tar.gz",
+      "sha256": "A343C6294F770742904E6A6792E0956B5FF8212ABFB63CAC99237DE2E210FA0F"
+    }
+  },
+  "ninja": {
+    "version": "1.13.2",
+    "aarch64": {
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux-aarch64.zip",
+      "sha256": "FD2CACC8050A7F12A16A2E48F9E06FCA5C14FC4C2BEE2BABB67B58BE17A607FC"
+    }
+  },
+  "sysroot": {
+    "version": "2026.10.13.1",
+    "url": "https://github.com/Ken5998/pinyon-shift-arm64/releases/download/sysroot-2026.10.13.1/pinyon-arm64-sysroot-2026.10.13.1.tar.xz",
+    "sha256": "087B214D9748D98A67920AA39AE80ADA0222C782C09F47B367BD8A69FA6A2132"
+  }
+}

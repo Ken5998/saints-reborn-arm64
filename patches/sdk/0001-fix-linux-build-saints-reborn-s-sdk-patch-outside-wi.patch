@@ -1,0 +1,380 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 22:14:11 +0000
+Subject: [PATCH] fix(linux): build saints reborn's sdk patch outside windows
+
+Saints Reborn's patches/rexglue-sdk.patch calls a few Win32 functions
+outside its _WIN32 blocks, so the runtime and the GPU plugin do not
+build on Linux:
+
+- rex/win32_shims.h gives Linux and macOS GetTickCount64, Sleep,
+  GetCurrentProcessId and SOCKET, and REX_SR_EXPORT for the functions
+  the game looks up by name (__declspec(dllexport) on Windows, default
+  visibility elsewhere).
+- select: the wait that also wakes on other UDP sockets passes the
+  highest descriptor + 1 (Windows ignores it) and stops at FD_SETSIZE
+  without Windows' fd_count; getsockname and getsockopt take a
+  socklen_t.
+- online_identity: the executable folder, the random install id and
+  the machine and user names come from POSIX; the owner key (reserved
+  names) stays Windows-only, so elsewhere reserved names stay reserved.
+- xsocket includes netdb.h for getaddrinfo; xgi_live names its
+  dependent TranslateVirtual template, which MSVC does not require.
+---
+ include/rex/win32_shims.h             | 34 ++++++++++++++++++++++++++
+ src/graphics/shared_memory.cpp        |  1 +
+ src/kernel/xam/apps/xgi_app.cpp       |  1 +
+ src/kernel/xam/apps/xgi_live.inc      |  8 +++---
+ src/kernel/xam/apps/xlivebase_app.cpp |  7 +++---
+ src/kernel/xam/xam_net.cpp            | 25 ++++++++++++++++---
+ src/system/eos_lan_off.cpp            |  4 ++-
+ src/system/online_identity.cpp        | 35 +++++++++++++++++++++++++++
+ src/system/xsocket.cpp                |  1 +
+ 9 files changed, 104 insertions(+), 12 deletions(-)
+ create mode 100644 include/rex/win32_shims.h
+
+diff --git a/include/rex/win32_shims.h b/include/rex/win32_shims.h
+new file mode 100644
+index 0000000..1be04a2
+--- /dev/null
++++ b/include/rex/win32_shims.h
+@@ -0,0 +1,34 @@
++/**
++ * Saints Reborn ARM64: the few Win32 calls the Saints Reborn SDK patch makes
++ * outside its _WIN32 blocks, for Linux and macOS builds.
++ */
++#pragma once
++
++// Functions the game executable looks up in the runtime by name.
++#if defined(_WIN32)
++#define REX_SR_EXPORT __declspec(dllexport)
++#else
++#define REX_SR_EXPORT __attribute__((visibility("default")))
++#endif
++
++#if !defined(_WIN32)
++#include <chrono>
++#include <cstdint>
++#include <thread>
++
++#include <unistd.h>
++
++inline uint64_t GetTickCount64() {
++  return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
++                      std::chrono::steady_clock::now().time_since_epoch())
++                      .count());
++}
++
++inline void Sleep(uint32_t milliseconds) {
++  std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
++}
++
++inline uint32_t GetCurrentProcessId() { return uint32_t(getpid()); }
++
++using SOCKET = int;
++#endif
+diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
+index 68d3b29..40a826e 100644
+--- a/src/graphics/shared_memory.cpp
++++ b/src/graphics/shared_memory.cpp
+@@ -34,6 +34,7 @@
+ #include <windows.h>
+ #endif
+ #include <rex/math.h>
++#include <rex/win32_shims.h>
+ #include <rex/memory.h>
+ 
+ namespace rex::graphics {
+diff --git a/src/kernel/xam/apps/xgi_app.cpp b/src/kernel/xam/apps/xgi_app.cpp
+index 1b58324..2c81a38 100644
+--- a/src/kernel/xam/apps/xgi_app.cpp
++++ b/src/kernel/xam/apps/xgi_app.cpp
+@@ -17,6 +17,7 @@
+ #include <rex/chrono/clock.h>
+ #include <rex/logging.h>
+ #include <rex/thread.h>
++#include <rex/win32_shims.h>
+ 
+ 
+ // Online layer trace (only with xam_signed_in_to_live): each XGI / XLiveBase
+diff --git a/src/kernel/xam/apps/xgi_live.inc b/src/kernel/xam/apps/xgi_live.inc
+index 6ca2795..026211b 100644
+--- a/src/kernel/xam/apps/xgi_live.inc
++++ b/src/kernel/xam/apps/xgi_live.inc
+@@ -223,7 +223,7 @@ uint32_t FillSearchResults(Mem* memory, uint32_t results_ptr, uint32_t buffer_si
+   std::vector<Advert> found;
+   std::vector<std::pair<uint32_t, uint32_t>> wanted;
+   for (uint32_t i = 0; ctx_ptr && i < num_ctx && i < 32; ++i) {
+-    auto* c = memory->TranslateVirtual<uint8_t*>(ctx_ptr + i * 8);
++    auto* c = memory->template TranslateVirtual<uint8_t*>(ctx_ptr + i * 8);
+     wanted.push_back({rex::memory::load_and_swap<uint32_t>(c), rex::memory::load_and_swap<uint32_t>(c + 4)});
+   }
+   const bool me_modded = rex::system::online::Modded();
+@@ -268,7 +268,7 @@ uint32_t FillSearchResults(Mem* memory, uint32_t results_ptr, uint32_t buffer_si
+   REXLOG_INFO("LIVE {}: {} advert(s) online, {} match (search contexts:{}; this game {})", what, texts.size(),
+               found.size(), wanted_text, me_modded ? "modded" : "unmodded");
+   if (!results_ptr || buffer_size < 8) return 0;
+-  uint8_t* base = memory->TranslateVirtual<uint8_t*>(results_ptr);
++  uint8_t* base = memory->template TranslateVirtual<uint8_t*>(results_ptr);
+   std::memset(base, 0, buffer_size);
+   uint32_t count = 0;
+   uint32_t tail = buffer_size;  // extra arrays grow down from the end
+@@ -346,7 +346,7 @@ bool AdvertIsPrivate(const uint8_t* info) {
+ //   <players>|<max players>|<0 = in the lobby (joinable), 1 = a match is running,
+ //   2 = searching for players / anything else (joins only work in the lobby)>
+ // Private Parties and modded games never show (fair play, as in the search).
+-extern "C" __declspec(dllexport) int SrPublicLobbies(char* out, int size) {
++extern "C" REX_SR_EXPORT int SrPublicLobbies(char* out, int size) {
+   if (!out || size <= 1) return 0;
+   std::string text;
+   const auto adverts = rex::system::eoslan::LiveAdverts(0);  // also starts Epic
+@@ -380,7 +380,7 @@ extern "C" __declspec(dllexport) int SrPublicLobbies(char* out, int size) {
+   return n;
+ }
+ // A on a lobby in MULTIPLAYER > LOBBIES: join that host's session.
+-extern "C" __declspec(dllexport) int SrJoinLobby(const char* session_hex) {
++extern "C" REX_SR_EXPORT int SrJoinLobby(const char* session_hex) {
+   if (!session_hex) return 0;
+   const std::string want(session_hex);
+   if (want.size() != 120) return 0;
+diff --git a/src/kernel/xam/apps/xlivebase_app.cpp b/src/kernel/xam/apps/xlivebase_app.cpp
+index 6f9486b..ce66b76 100644
+--- a/src/kernel/xam/apps/xlivebase_app.cpp
++++ b/src/kernel/xam/apps/xlivebase_app.cpp
+@@ -19,6 +19,7 @@
+ #include <rex/logging.h>
+ #include <rex/string.h>
+ #include <rex/thread.h>
++#include <rex/win32_shims.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xenumerator.h>
+ #include <rex/system/xam/user_profile.h>
+@@ -308,7 +309,7 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message, uint32_t buffer_pt
+ // XInviteSend for the game exe (its wrapper sub_8265BBC0 is replaced there,
+ // project/src/online_players.cpp): user, invitee count, XUID array (guest),
+ // XOVERLAPPED (guest, may be 0). Returns what XInviteSend returns.
+-extern "C" __declspec(dllexport) uint32_t SrLiveInviteSend(uint32_t user, uint32_t count, uint32_t xuids_ptr,
++extern "C" REX_SR_EXPORT uint32_t SrLiveInviteSend(uint32_t user, uint32_t count, uint32_t xuids_ptr,
+                                                            uint32_t overlapped_ptr) {
+   auto* ks = REX_KERNEL_STATE();
+   if (!ks) return 1627;  // ERROR_FUNCTION_FAILED
+@@ -358,7 +359,7 @@ uint32_t StorageFinish(uint32_t overlapped_ptr, uint32_t result, uint32_t length
+ }  // namespace
+ 
+ // XStorageUploadFromMemory(user, server path, size, buffer, XOVERLAPPED)
+-extern "C" __declspec(dllexport) uint32_t SrStorageUpload(uint32_t user, uint32_t path_ptr, uint32_t size,
++extern "C" REX_SR_EXPORT uint32_t SrStorageUpload(uint32_t user, uint32_t path_ptr, uint32_t size,
+                                                           uint32_t buffer_ptr, uint32_t overlapped_ptr) {
+   auto* ks = REX_KERNEL_STATE();
+   if (!ks || !buffer_ptr || size > (16u << 20)) return 1627;
+@@ -385,7 +386,7 @@ extern "C" __declspec(dllexport) uint32_t SrStorageUpload(uint32_t user, uint32_
+ // size, XSTORAGE_DOWNLOAD_TO_MEMORY_RESULTS {u32 bytes, u64 owner xuid,
+ // u64 created filetime}, XOVERLAPPED). Nothing stored yet: fails at once
+ // (1627), which the game treats as "no saved character" (defaults).
+-extern "C" __declspec(dllexport) uint32_t SrStorageDownload(uint32_t user, uint32_t path_ptr, uint32_t size,
++extern "C" REX_SR_EXPORT uint32_t SrStorageDownload(uint32_t user, uint32_t path_ptr, uint32_t size,
+                                                             uint32_t buffer_ptr, uint32_t results_size,
+                                                             uint32_t results_ptr, uint32_t overlapped_ptr) {
+   auto* ks = REX_KERNEL_STATE();
+diff --git a/src/kernel/xam/xam_net.cpp b/src/kernel/xam/xam_net.cpp
+index 1634d2b..fd67a99 100644
+--- a/src/kernel/xam/xam_net.cpp
++++ b/src/kernel/xam/xam_net.cpp
+@@ -39,6 +39,7 @@
+ #include <rex/logging.h>
+ #include <rex/hook.h>
+ #include <rex/types.h>
++#include <rex/win32_shims.h>
+ #include <rex/string.h>
+ #include <rex/system/kernel_state.h>
+ #include <rex/system/xevent.h>
+@@ -57,6 +58,12 @@
+ #include <sys/socket.h>
+ #endif
+ 
++#if REX_PLATFORM_WIN32
++using host_socklen_t = int;
++#else
++using host_socklen_t = socklen_t;
++#endif
++
+ namespace rex::system {
+ std::vector<uint32_t> LocalIPv4s();
+ uint32_t LanAddress();
+@@ -1270,15 +1277,25 @@ i32 NetDll_select_entry(i32 caller, i32 nfds, ppc_ptr_t<x_fd_set> readfds,
+     while (true) {
+       fd_set r = native_readfds;
+       bool companion = false;
++      // Windows ignores select's first argument; POSIX needs the highest
++      // descriptor + 1.
++      int max_fd = -1;
++      for (uint32_t i = 0; i < host_readfds.count; ++i)
++        max_fd = std::max(max_fd, int(host_readfds.sockets[i]->native_handle()));
+       for (uint64_t h : BoundDatagramSockets()) {
++#if REX_PLATFORM_WIN32
+         if (r.fd_count >= FD_SETSIZE) break;
++#else
++        if (h >= FD_SETSIZE) continue;
++#endif
+         if (!FD_ISSET(SOCKET(h), &r)) {
+           FD_SET(SOCKET(h), &r);
+           companion = true;
++          max_fd = std::max(max_fd, int(h));
+         }
+       }
+       timeval slice{0, 250000};
+-      ret = select(0, &r, nullptr, nullptr, &slice);
++      ret = select(max_fd + 1, &r, nullptr, nullptr, &slice);
+       if (ret < 0) break;
+       if (ret == 0) {
+         GatesTimer();
+@@ -1444,7 +1461,7 @@ u32 NetDll_getsockname_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XSOCKADDR_
+   auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+   if (!socket || !name) { XThread::SetLastError(0x2736); return -1; }
+   sockaddr_in a{};
+-  int len = sizeof(a);
++  host_socklen_t len = sizeof(a);
+   if (getsockname(socket->native_handle(), (sockaddr*)&a, &len) != 0) return -1;
+   name->sin_family = 2;
+   name->sin_port = ntohs(a.sin_port);
+@@ -1457,8 +1474,8 @@ u32 NetDll_getsockopt_entry(u32 caller, u32 socket_handle, u32 level, u32 optnam
+                             mapped_void optval_ptr, mapped_u32 optlen_ptr) {
+   auto socket = REX_KERNEL_OBJECTS()->LookupObject<XSocket>(socket_handle);
+   if (!socket) { XThread::SetLastError(0x2736); return -1; }
+-  int len = optlen_ptr ? int(*optlen_ptr) : 0;
+-  std::vector<char> tmp(size_t(std::max(len, 4)), 0);
++  host_socklen_t len = optlen_ptr ? host_socklen_t(*optlen_ptr) : 0;
++  std::vector<char> tmp(size_t(std::max<int>(int(len), 4)), 0);
+   if (getsockopt(socket->native_handle(), level, optname, tmp.data(), &len) != 0) {
+     // Unknown to Windows (Xbox-only options): report 0.
+     if (optval_ptr && optlen_ptr && *optlen_ptr >= 4) *reinterpret_cast<rex::be<uint32_t>*>(static_cast<void*>(optval_ptr)) = 0;
+diff --git a/src/system/eos_lan_off.cpp b/src/system/eos_lan_off.cpp
+index cb3fee7..2d06f4e 100644
+--- a/src/system/eos_lan_off.cpp
++++ b/src/system/eos_lan_off.cpp
+@@ -7,6 +7,8 @@
+ #include <string>
+ #include <vector>
+ 
++#include <rex/win32_shims.h>
++
+ namespace rex::system::eoslan {
+ 
+ struct LiveAdvertEntry {
+@@ -54,7 +56,7 @@ void Send(uint32_t, uint16_t, uint16_t, const uint8_t*, size_t) {}
+ }  // namespace rex::system::eoslan
+ 
+ #ifdef _WIN32
+-#define SR_EXPORT extern "C" __declspec(dllexport)
++#define SR_EXPORT extern "C" REX_SR_EXPORT
+ #else
+ #define SR_EXPORT extern "C"
+ #endif
+diff --git a/src/system/online_identity.cpp b/src/system/online_identity.cpp
+index 1990170..731e174 100644
+--- a/src/system/online_identity.cpp
++++ b/src/system/online_identity.cpp
+@@ -26,12 +26,20 @@
+ #include <string>
+ #include <vector>
+ 
++#ifdef _WIN32
+ #ifndef WIN32_LEAN_AND_MEAN
+ #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+ #include <bcrypt.h>
+ #pragma comment(lib, "bcrypt.lib")
++#else
++#include <climits>
++#include <cstdlib>
++#include <random>
++
++#include <unistd.h>
++#endif
+ 
+ #include "sr_reserved_names.h"
+ 
+@@ -68,12 +76,19 @@ const uint8_t kOwnerPublic[72] = {
+ constexpr char kProofPrefix[] = "SaintsReborn owner v1|";
+ 
+ std::string ExeDir() {
++#ifdef _WIN32
+   char path[MAX_PATH] = {};
+   GetModuleFileNameA(nullptr, path, MAX_PATH);
+   std::string s(path);
++#else
++  char path[PATH_MAX] = {};
++  const ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
++  std::string s(path, n > 0 ? size_t(n) : 0);
++#endif
+   return s.substr(0, s.find_last_of("\\/") + 1);
+ }
+ 
++#ifdef _WIN32
+ bool Sha256(const std::string& text, uint8_t out[32]) {
+   BCRYPT_ALG_HANDLE alg = nullptr;
+   if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return false;
+@@ -117,6 +132,12 @@ bool Sign(const std::vector<uint8_t>& priv, const std::string& message, uint8_t
+   BCryptCloseAlgorithmProvider(alg, 0);
+   return ok;
+ }
++#else
++// The owner key (reserved names) is checked with Windows' CNG only; elsewhere
++// nothing verifies or signs, so reserved names stay reserved.
++bool Verify(const std::string&, const uint8_t[64]) { return false; }
++bool Sign(const std::vector<uint8_t>&, const std::string&, uint8_t[64]) { return false; }
++#endif
+ 
+ std::once_flag g_key_once;
+ std::vector<uint8_t> g_private;  // BCRYPT_ECCPRIVATE_BLOB, only on the owner's PC
+@@ -234,22 +255,36 @@ uint64_t OnlineXuid() {
+     }
+     if (id.size() < 16) {
+       uint8_t rnd[16] = {};
++#ifdef _WIN32
+       if (BCryptGenRandom(nullptr, rnd, sizeof(rnd), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+         const uint64_t t = GetTickCount64() ^ (uint64_t(GetCurrentProcessId()) << 32);
+         std::memcpy(rnd, &t, 8);
+       }
++#else
++      std::random_device rd;
++      for (auto& b : rnd) b = uint8_t(rd());
++#endif
+       id = Hex(rnd, sizeof(rnd));
+       if (FILE* f = std::fopen(path.c_str(), "wb")) {
+         std::fwrite(id.data(), 1, id.size(), f);
+         std::fclose(f);
+       }
+     }
++#ifdef _WIN32
+     char pc[MAX_COMPUTERNAME_LENGTH + 1] = {};
+     DWORD pc_n = sizeof(pc);
+     GetComputerNameA(pc, &pc_n);
+     char user[256] = {};
+     DWORD user_n = 0;
+     if (const DWORD got = GetEnvironmentVariableA("USERNAME", user, sizeof(user)); got && got < sizeof(user)) user_n = got;
++#else
++    char pc[256] = {};
++    gethostname(pc, sizeof(pc) - 1);
++    const size_t pc_n = std::strlen(pc);
++    const char* user_env = std::getenv("USER");
++    const char* user = user_env ? user_env : "";
++    const size_t user_n = std::strlen(user);
++#endif
+     const std::string key = "saintsreborn-xuid|" + id + "|" + std::string(pc, pc_n) + "|" + std::string(user, user_n);
+     uint64_t h = 1469598103934665603ull;
+     for (char c : key) { h ^= uint8_t(c); h *= 1099511628211ull; }
+diff --git a/src/system/xsocket.cpp b/src/system/xsocket.cpp
+index d437ac5..1011715 100644
+--- a/src/system/xsocket.cpp
++++ b/src/system/xsocket.cpp
+@@ -33,6 +33,7 @@
+ #include <WS2tcpip.h>
+ #else
+ #include <arpa/inet.h>
++#include <netdb.h>
+ #include <netinet/in.h>
+ #include <netinet/ip.h>
+ #include <sys/socket.h>
