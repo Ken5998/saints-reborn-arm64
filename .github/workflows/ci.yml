@@ -38,7 +38,7 @@ jobs:
       - name: Install git, Python, the download tools and the desktop libraries
         run: >-
           dnf install -y --setopt=install_weak_deps=False git python3 curl tar xz
-          libX11-xcb libwayland-client
+          libX11 libX11-xcb libxcb libwayland-client
       - uses: actions/checkout@v5
       - name: Fetch the pinned toolchain
         run: scripts/fetch-toolchain.sh "$RUNNER_TEMP/toolchain"
