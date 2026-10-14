@@ -9,10 +9,10 @@ Pinyon Shift.
 
 **Status:** Saints Reborn builds for linux-arm64: the ReXGlue SDK with Saints
 Reborn's patch and the Vulkan backend, and the game itself. CI checks both
-natively on ARM64 and cross-compiled on x86-64. It has not run on a handheld
-yet; the next step is the first build from a disc and the first launch on the
-Retroid Pocket 6. After that come the Vulkan versions of the fixes Saints
-Reborn made only for D3D12, and a launcher that adds the game to Steam
+natively on ARM64 and cross-compiled on x86-64. Built from a disc on the
+Retroid Pocket 6, it starts and reaches the main menu, and the build adds it
+to Steam with its artwork. Next come the Vulkan versions of the fixes Saints
+Reborn made only for D3D12, and a launcher
 ([docs/FEASIBILITY.md](docs/FEASIBILITY.md)).
 
 This repository is an overlay: patches, scripts and CI only. It never
@@ -45,6 +45,7 @@ generated from them, and none may be published here.
 | `scripts/prepare.sh WORKDIR [REF]` | Checks out Saints Reborn and its SDK commit and applies all the patches. |
 | `scripts/build-sdk.sh SDK TOOLCHAIN` | Builds and installs the SDK for linux-arm64 with Vulkan. |
 | `scripts/build-game.sh SR SDK TOOLCHAIN GENERATED` | Builds the game from the recompiled code. |
+| `scripts/add-to-steam.sh [DIR]` | Adds the built game to Steam with its artwork (`tools/steam_art.cpp` draws it, `scripts/add-to-steam.py` writes the entry). |
 | `scripts/placeholder-codegen.py SR SDK OUT` | Stand-in recompiled code, so CI can build the game without it (the result does not run). |
 | `scripts/test-safety-net.sh SR SDK TOOLCHAIN` | Checks the safety net with fake guest memory, natively or under qemu. |
 | `.github/workflows/ci.yml` | All of it without game files, natively on an ARM64 runner in Fedora 44 (the base of ArmadaOS) and cross-compiled on x86-64. |
@@ -65,9 +66,18 @@ recompiles it and builds it. That needs about 40 GB free and probably a few
 hours on a handheld; run it again to resume, finished steps are skipped. The
 game ends up in `~/.local/share/SaintsReborn-arm64/SaintsReborn/dist`.
 
-Add `dist/saintsrow` to Steam as a non-Steam game and start it from Steam:
-on ArmadaOS the handheld's controls reach a game only when Steam launches it.
-For the GPU driver, Armada Control > Compatibility > Advanced > Drivers >
+At the end it adds **Saints Reborn** to the Steam library as a non-Steam game
+(native, no Proton) with its artwork, drawn from Saints Reborn's own logo and
+icon. Steam is closed for a moment and started again, since it would
+otherwise overwrite the new entry. For a game built before this existed:
+
+```bash
+git -C saints-reborn-arm64 pull
+saints-reborn-arm64/scripts/add-to-steam.sh
+```
+
+Start the game from Steam: on ArmadaOS the handheld's controls reach a game
+only when Steam launches it. For the GPU driver, Armada Control > Compatibility > Advanced > Drivers >
 Turnip **Devel** is the one that gave Pinyon Shift its best performance.
 
 On x86-64 Linux, `build.sh` works the same with `qemu-user` installed (CMake,

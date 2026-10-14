@@ -15,6 +15,11 @@ ReXGlue SDK: https://github.com/rexglue/rexglue-sdk
 Copyright (c) 2026, Tom Clay, with portions derived from the Xenia project
 (Copyright (c) 2022, Ben Vanik and Xenia project contributors).
 
+The Steam artwork is drawn on the player's machine from Saints Reborn's own
+logo and icon (core/SaintsRebornLogo/logo.png, project/res/SaintsReborn.ico),
+read with stb_image (public domain, from the SDK's thirdparty folder); none of
+it is stored here.
+
 The toolchain setup follows pinyon-shift-arm64
 (https://github.com/Ken5998/pinyon-shift-arm64) and uses the ARM64 sysroot it
 publishes.

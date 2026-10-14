@@ -2,9 +2,10 @@
 # Builds Saints Reborn for linux-arm64 from your own Saints Row disc image,
 # start to finish: the toolchain, the patched ReXGlue SDK, the game files
 # from the ISO, the recompiled code, the game, and a ready folder to play
-# from. Made for the handheld itself (ArmadaOS on the Retroid Pocket 6, or any
-# aarch64 Linux); it also runs on x86-64 Linux with qemu-user installed, and
-# the result is then copied to the handheld.
+# from, added to Steam with its artwork. Made for the handheld itself
+# (ArmadaOS on the Retroid Pocket 6, or any aarch64 Linux); it also runs on
+# x86-64 Linux with qemu-user installed, and the result is then copied to the
+# handheld. SR_ADD_TO_STEAM=0 leaves Steam alone.
 #
 #   scripts/build.sh ISO [DIR]
 #
@@ -138,7 +139,22 @@ step "Making the keyboard/mouse button pictures"
 "${run[@]}" "$build/glyphgen" "$game/packfiles" "$sr/tools/glyphgen/art.txt" "$dist/kbm_ui.bin" ||
     echo "Warning: the keyboard/mouse button pictures could not be made; the game will show controller buttons."
 
+# On a machine that builds for another one (x86-64), Steam is the other's.
+steam=no
+if [ "${SR_ADD_TO_STEAM:-1}" = 1 ] && [ ${#run[@]} -eq 0 ]; then
+    step "Adding Saints Reborn to Steam"
+    if "$repo/scripts/add-to-steam.sh" "$dir"; then
+        steam=yes
+    else
+        echo "Warning: Saints Reborn was not added to Steam; scripts/add-to-steam.sh tries again."
+    fi
+fi
+
 echo
 echo "Done! Saints Reborn is in $dist."
-echo "Play it from Steam (add $dist/saintsrow as a non-Steam game) so the controls work,"
-echo "or run $dist/saintsrow from a terminal."
+if [ "$steam" = yes ]; then
+    echo "Play it from Steam (\"Saints Reborn\" in the library): the handheld's controls reach it only from there."
+else
+    echo "Play it from Steam (scripts/add-to-steam.sh adds it) so the controls work,"
+    echo "or run $dist/saintsrow from a terminal."
+fi

@@ -57,6 +57,15 @@ jobs:
         run: |
           scripts/test-safety-net.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
             "$RUNNER_TEMP/toolchain"
+      - name: Check Add to Steam with a made-up Steam folder
+        run: |
+          python3 tests/add_to_steam_test.py
+          ln -sfn "$RUNNER_TEMP/toolchain" "$RUNNER_TEMP/work/toolchain"
+          mkdir -p "$RUNNER_TEMP/work/SaintsReborn/dist" "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config"
+          touch "$RUNNER_TEMP/work/SaintsReborn/dist/saintsrow"
+          HOME="$RUNNER_TEMP/home" scripts/add-to-steam.sh "$RUNNER_TEMP/work"
+          ls -l "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config/grid"
+          test "$(ls "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config/grid" | wc -l)" = 5
 
   cross:
     runs-on: ubuntu-24.04
@@ -86,3 +95,12 @@ jobs:
         run: |
           scripts/test-safety-net.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
             "$RUNNER_TEMP/toolchain"
+      - name: Check Add to Steam with a made-up Steam folder
+        run: |
+          python3 tests/add_to_steam_test.py
+          ln -sfn "$RUNNER_TEMP/toolchain" "$RUNNER_TEMP/work/toolchain"
+          mkdir -p "$RUNNER_TEMP/work/SaintsReborn/dist" "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config"
+          touch "$RUNNER_TEMP/work/SaintsReborn/dist/saintsrow"
+          HOME="$RUNNER_TEMP/home" scripts/add-to-steam.sh "$RUNNER_TEMP/work"
+          ls -l "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config/grid"
+          test "$(ls "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config/grid" | wc -l)" = 5
