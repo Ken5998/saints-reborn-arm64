@@ -7,13 +7,29 @@ Linux handhelds such as the Retroid Pocket 6 with ArmadaOS, the way
 [pinyon-shift-arm64](https://github.com/Ken5998/pinyon-shift-arm64) does for
 Pinyon Shift.
 
-**Status:** the ReXGlue SDK, with Saints Reborn's patch, builds for
-linux-arm64 with the Vulkan backend. The game itself does not build for ARM64
-yet; [docs/FEASIBILITY.md](docs/FEASIBILITY.md) lists what is left.
+**Status:** Saints Reborn builds for linux-arm64: the ReXGlue SDK with Saints
+Reborn's patch and the Vulkan backend, and the game itself. CI checks both
+natively on ARM64 and cross-compiled on x86-64. It has not run on a handheld
+yet; the next step is the first build from a disc and the first launch on the
+Retroid Pocket 6. After that come the Vulkan versions of the fixes Saints
+Reborn made only for D3D12, and a launcher that adds the game to Steam
+([docs/FEASIBILITY.md](docs/FEASIBILITY.md)).
 
 This repository is an overlay: patches, scripts and CI only. It never
 contains the game, files extracted from your disc, or the code and binaries
 generated from them, and none may be published here.
+
+## Not in the ARM64 build
+
+- **Online co-op and online play over Epic.** Saints Reborn ships them as a
+  Windows-only online pack; this port leaves them out.
+- **Zombies and the native mods** (Whompay's Trainer, the native example):
+  they are Windows DLLs.
+- **Code hooks in Lua mods** (`wml.hook`). They are MinHook detours, which
+  only exist for x86; on ARM64 the mod log says hooks are not supported yet.
+  First Person (the V key), SixtyFPS and Living Stilwater need them. Lua
+  mods that read and write game memory or patch game files work.
+- **World Studio**, the Windows editor.
 
 ## What is here
 
@@ -23,22 +39,39 @@ generated from them, and none may be published here.
 | `toolchain.json` | LLVM 20.1.8, CMake, Ninja and the ARM64 sysroot from pinyon-shift-arm64, with their checksums. |
 | `cmake/toolchains/linux-arm64.cmake` | Builds for aarch64 Linux against that sysroot, natively or from x86-64. |
 | `patches/sdk/` | What linux-arm64 needs on top of Saints Reborn's `patches/rexglue-sdk.patch`. |
+| `patches/game/` | Saints Reborn for linux-arm64: the build, the Windows-only parts, and a guest memory safety net for AArch64. |
+| `scripts/build.sh ISO [DIR]` | Everything below, from your disc to a game folder ready to play. |
 | `scripts/fetch-toolchain.sh DEST` | Downloads and checks the toolchain. |
-| `scripts/prepare-sdk.sh WORKDIR [REF]` | Checks out Saints Reborn and its SDK commit and applies both patches. |
+| `scripts/prepare.sh WORKDIR [REF]` | Checks out Saints Reborn and its SDK commit and applies all the patches. |
 | `scripts/build-sdk.sh SDK TOOLCHAIN` | Builds and installs the SDK for linux-arm64 with Vulkan. |
-| `.github/workflows/ci.yml` | The same, natively on an ARM64 runner in Fedora 44 (the base of ArmadaOS) and cross-compiled on x86-64. |
+| `scripts/build-game.sh SR SDK TOOLCHAIN GENERATED` | Builds the game from the recompiled code. |
+| `scripts/placeholder-codegen.py SR SDK OUT` | Stand-in recompiled code, so CI can build the game without it (the result does not run). |
+| `scripts/test-safety-net.sh SR SDK TOOLCHAIN` | Checks the safety net with fake guest memory, natively or under qemu. |
+| `.github/workflows/ci.yml` | All of it without game files, natively on an ARM64 runner in Fedora 44 (the base of ArmadaOS) and cross-compiled on x86-64. |
 
-## Building the SDK
+## Building the game
 
-On aarch64 Linux (ArmadaOS included: only `git`, `python3`, `curl`, `tar`
-and `xz` are needed) or on x86-64 Linux with CMake, Ninja and
-`wayland-scanner` installed:
+You need your own Saints Row disc image (Xbox 360). On the handheld (ArmadaOS
+included: only `git`, `python3`, `curl`, `tar` and `xz` are needed), from
+Desktop Mode:
 
 ```bash
-scripts/fetch-toolchain.sh ~/sr-arm64/toolchain
-scripts/prepare-sdk.sh ~/sr-arm64/work
-scripts/build-sdk.sh ~/sr-arm64/work/rexglue-sdk ~/sr-arm64/toolchain
+git clone https://github.com/Ken5998/saints-reborn-arm64
+saints-reborn-arm64/scripts/build.sh "/path/to/Saints Row.iso"
 ```
+
+It downloads the toolchain, builds the SDK, extracts the game from the disc,
+recompiles it and builds it. That needs about 40 GB free and probably a few
+hours on a handheld; run it again to resume, finished steps are skipped. The
+game ends up in `~/.local/share/SaintsReborn-arm64/SaintsReborn/dist`.
+
+Add `dist/saintsrow` to Steam as a non-Steam game and start it from Steam:
+on ArmadaOS the handheld's controls reach a game only when Steam launches it.
+For the GPU driver, Armada Control > Compatibility > Advanced > Drivers >
+Turnip **Devel** is the one that gave Pinyon Shift its best performance.
+
+On x86-64 Linux, `build.sh` works the same with `qemu-user` installed (CMake,
+Ninja and `wayland-scanner` too); copy the `dist` folder to the handheld.
 
 ## License
 

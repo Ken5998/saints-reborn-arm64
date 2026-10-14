@@ -20,6 +20,13 @@ rest of the patch compiles unchanged for aarch64.
 `rexglue` recompiler for aarch64, natively on an aarch64 machine (CI: Fedora
 44, as ArmadaOS) or cross-compiled on x86-64.
 
+Building the game against it needed three more SDK fixes, also in
+`patches/sdk/`: the POSIX exception handler read the instruction at the
+program counter even when the program counter itself faulted (a call through
+a null pointer), and its changes to vector registers were lost on CPUs with
+SVE; and the game reads two GPU settings (`vsync`, `guest_vblank_rate`) that
+the Linux GPU plugin did not export.
+
 ## 2. What the Saints Reborn SDK patch changes
 
 `patches/rexglue-sdk.patch`: 65 files, +11,123 / -340 lines.
@@ -51,17 +58,24 @@ do (estimated from their comments and functions):
 
 ## 3. The game code (`project/src`, `core/`)
 
+Done in `patches/game/` (2026-10-14): the game compiles and links for
+linux-arm64, checked in CI with placeholder recompiled code. What this
+section found, and what became of it:
+
 - **x86 intrinsics**: 106 uses of 19 SSE intrinsics in 7 files
   (`native_math.inc`, `render_fixes.cpp`, `native_shadow.inc`,
   `render_overlap.inc`, `colour_split.inc`, `native_mesh.inc`, `cpu_gate.cpp`).
   The SDK already ships SIMDe, which maps all of them to NEON.
   `cpu_gate.cpp` (x86-64-v3 check) and the `-march=x86-64-v*` flags are
-  replaced by an ARMv8 target.
+  replaced by an ARMv8 target. *Done: SIMDe, `-march=armv8.2-a` (the LSE
+  atomics the recompiled `lwarx`/`stwcx.` compare and swaps use).*
 - **Guest memory safety net** (`main.cpp`, about 380 lines in `_WIN32`): a
   Windows exception handler that decodes x86 instructions to turn the game's
   null and garbage pointer reads into zeros. Without it the game crashes
   where the console did not. Needs an AArch64 `SIGSEGV` version (fixed-size
-  instructions make it simpler).
+  instructions make it simpler). *Done: `guest_safety_net_posix.cpp`, with
+  its own test (`tests/safety_net_test.cpp`, run in CI natively and under
+  qemu).*
 - **Windows APIs**: 22 of the 54 files in `project/src` use them; 12 already
   keep them all in `_WIN32` blocks, and a few more only call
   `GetTickCount64` or a couple of Win32 functions outside them. Real porting
@@ -69,11 +83,15 @@ do (estimated from their comments and functions):
   `online_players.cpp`, `wml/mod_loader.cpp` (MinHook, x86 only),
   `online_integrity.cpp`, `stubs.cpp`, `main.cpp`, `render_fixes.cpp`, and in
   `core/WhompaysCoop/coop.cpp` (Winsock) and `core/Zombies/zombies.cpp`.
+  *Done: the Windows-only parts stay Windows-only (World Studio, the cheat
+  tool watch, the focus checks, the invite key); co-op and Zombies are not
+  built. The Lua mods' code hooks (MinHook) have no AArch64 version yet.*
 - **Build**: the CMake project is Windows-only in places (`WIN32`
   executable, `.rc` resources, `/ENTRY`, `/MAP`, `/force:multiple`, `/STACK`,
   `winmm`, `winhttp`, `ws2_32`). `/force:multiple` lets `stubs.cpp` replace
   SDK kernel exports; with the SDK as hidden-visibility shared libraries on
-  Linux this needs checking.
+  Linux this needs checking. *Done: the executable's own definitions take
+  precedence over the shared libraries, as on Windows.*
 
 ## 4. Online co-op (EOS)
 
@@ -83,8 +101,9 @@ credentials). Building it for ARM64 would need the EOS SDK for Linux ARM64
 and credentials of a different Epic product, so ARM64 players would never
 meet Windows players there. The patch already builds `eos_lan_off.cpp` when
 the EOS SDK is missing: online over Epic is off, System Link still works on a
-real LAN or VPN, and Whompay's co-op works by direct IP once its Winsock code
-is ported. That is the plan here.
+real LAN or VPN, and Whompay's co-op could work by direct IP once its
+Winsock code is ported. This port leaves online co-op out (2026-10-14): the
+co-op DLL is not built and the online pack is not installed.
 
 ## 5. Reused from pinyon-shift-arm64
 
