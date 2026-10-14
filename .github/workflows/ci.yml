@@ -5,7 +5,8 @@ name: ARM64 build
 # Vulkan backend, then Saints Reborn itself (patches/game/) against it, two
 # ways: natively on GitHub's ARM64 runner in a bare Fedora 44 (the release
 # ArmadaOS is built on) with only the pinned toolchain, as a handheld would,
-# and cross-compiled on x86-64 Ubuntu as a PC or WSL would.
+# and cross-compiled on x86-64 Ubuntu as a PC or WSL would. Then it checks the
+# guest memory safety net, natively and under qemu.
 #
 # No game files are involved: the game is built with placeholder recompiled
 # code (scripts/placeholder-codegen.py), which checks that everything
@@ -48,6 +49,10 @@ jobs:
           scripts/placeholder-codegen.py "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/generated"
           scripts/build-game.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
             "$RUNNER_TEMP/toolchain" "$RUNNER_TEMP/generated"
+      - name: Check the guest memory safety net
+        run: |
+          scripts/test-safety-net.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
+            "$RUNNER_TEMP/toolchain"
 
   cross:
     runs-on: ubuntu-24.04
@@ -73,3 +78,7 @@ jobs:
           scripts/placeholder-codegen.py "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/generated"
           scripts/build-game.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
             "$RUNNER_TEMP/toolchain" "$RUNNER_TEMP/generated"
+      - name: Check the guest memory safety net
+        run: |
+          scripts/test-safety-net.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
+            "$RUNNER_TEMP/toolchain"

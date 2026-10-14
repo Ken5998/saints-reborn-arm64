@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 02:42:53 +0000
+Subject: [PATCH] fix(posix): do not read the instruction on an instruction
+ abort
+
+On aarch64 the exception handler reads the instruction at the program
+counter to tell a load from a store. When the program counter itself is
+what faulted (a call through a null or garbage function pointer), there
+is no instruction to read, so the handler crashed inside the signal
+handler instead of passing the fault on.
+
+An instruction abort (ESR exception class 0b10000x) is now reported as
+an access violation of unknown kind. Without the ESR in the signal frame
+(qemu-user), a fault address equal to the program counter means the
+same.
+---
+ src/core/exception_handler_posix.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/core/exception_handler_posix.cpp b/src/core/exception_handler_posix.cpp
+index 8b1c76a..594a5d5 100644
+--- a/src/core/exception_handler_posix.cpp
++++ b/src/core/exception_handler_posix.cpp
+@@ -225,6 +225,13 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
+         access_violation_operation = (mcontext_esr->esr & (UINT64_C(1) << 6))
+                                          ? Exception::AccessViolationOperation::kWrite
+                                          : Exception::AccessViolationOperation::kRead;
++      } else if (mcontext_esr ? ((mcontext_esr->esr >> 26) & 0b111110) == 0b100000
++                              : reinterpret_cast<uint64_t>(signal_info->si_addr) == mcontext.pc) {
++        // An Instruction Abort (EC 0b100000 or 0b100001; without the ESR, a
++        // fault on the program counter itself): the program counter is not
++        // executable, for instance after a call through a null function
++        // pointer, so there is no instruction there to read.
++        access_violation_operation = Exception::AccessViolationOperation::kUnknown;
+       } else {
+         // Determine the memory access direction based on which instruction has
+         // requested it.

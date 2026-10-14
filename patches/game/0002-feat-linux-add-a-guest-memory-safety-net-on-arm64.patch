@@ -1,0 +1,419 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 02:43:52 +0000
+Subject: [PATCH] feat(linux): add a guest memory safety net on arm64
+
+On Windows a vectored exception handler (NullPageHandler) lets the game
+survive the bad memory accesses the original console code makes: near
+null and freed guest memory reads give zeros, writes are dropped, calls
+through null pointers return. Linux had nothing, so the first such
+access ended the game.
+
+guest_safety_net_posix.cpp does the same on aarch64 Linux through the
+SDK's exception handler:
+
+- the low 16 MB of guest memory is committed and the null object page
+  zeroed, as on Windows; a fault there that comes back re-commits the
+  page a few times, then the access is skipped;
+- other guest pages are committed on demand, except the GPU registers
+  (MMIO), which stay with the SDK;
+- a load or store the net cannot fix is decoded and skipped: loads give
+  zeros (single registers, pairs, vector structures and lanes, exclusive
+  loads, compare and swap and the LSE atomics), the base register moves
+  on for pre and post index forms;
+- a call to a null address or into the null object page returns 0 (1
+  after the same call failed 20 times in a row, to end wait loops);
+- brk traps (__builtin_trap) are skipped;
+- a fault it still cannot fix ends that worker thread; on the main
+  thread the process ends with the original signal instead of faulting
+  forever.
+---
+ project/CMakeLists.txt                 |   2 +-
+ project/src/guest_safety_net.h         |  14 ++
+ project/src/guest_safety_net_posix.cpp | 320 +++++++++++++++++++++++++
+ project/src/main.cpp                   |   3 +
+ 4 files changed, 338 insertions(+), 1 deletion(-)
+ create mode 100644 project/src/guest_safety_net.h
+ create mode 100644 project/src/guest_safety_net_posix.cpp
+
+diff --git a/project/CMakeLists.txt b/project/CMakeLists.txt
+index 1b3f8fe..064c054 100644
+--- a/project/CMakeLists.txt
++++ b/project/CMakeLists.txt
+@@ -96,7 +96,7 @@ if(WIN32)
+     list(APPEND SAINTSROW_SOURCES res/saintsreborn.rc src/world_studio_bridge.cpp)
+ else()
+     # World Studio (the editor) is Windows only.
+-    list(APPEND SAINTSROW_SOURCES src/world_studio_off.cpp)
++    list(APPEND SAINTSROW_SOURCES src/guest_safety_net_posix.cpp src/world_studio_off.cpp)
+ endif()
+ if(EXISTS "${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp")
+     list(APPEND SAINTSROW_SOURCES ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp)
+diff --git a/project/src/guest_safety_net.h b/project/src/guest_safety_net.h
+new file mode 100644
+index 0000000..ad2976e
+--- /dev/null
++++ b/project/src/guest_safety_net.h
+@@ -0,0 +1,14 @@
++#pragma once
++
++#include <cstdint>
++
++namespace sr {
++
++// Guest memory safety net outside Windows (Windows has its own in main.cpp):
++// turns the game's null and garbage pointer accesses into reads of zero and
++// skipped instructions instead of crashes. Installed once the guest memory
++// exists, from the UI thread (faults on other threads that cannot be fixed
++// end that thread instead of the process).
++void InstallGuestSafetyNet(uint8_t* membase);
++
++}  // namespace sr
+diff --git a/project/src/guest_safety_net_posix.cpp b/project/src/guest_safety_net_posix.cpp
+new file mode 100644
+index 0000000..b0b0a83
+--- /dev/null
++++ b/project/src/guest_safety_net_posix.cpp
+@@ -0,0 +1,320 @@
++// Guest memory safety net for AArch64 Linux: the counterpart of the Windows
++// handler in main.cpp (see there for what the game needs it for). The SDK's
++// own exception handler runs first (GPU MMIO, write-watched physical memory);
++// what it leaves comes here.
++#include "guest_safety_net.h"
++
++#if defined(__aarch64__) && !defined(_WIN32)
++
++#include <csignal>
++#include <cstring>
++
++#include <pthread.h>
++#include <sys/mman.h>
++#include <ucontext.h>
++#include <unistd.h>
++
++#include <rex/exception_handler.h>
++
++namespace sr {
++namespace {
++
++using rex::arch::Exception;
++
++constexpr uint64_t kGuestSize = 0x100000000ull;
++// Guest 0x00000000-0x00FFFFFF is committed zero-filled: near-null reads
++// return 0 and near-null writes land in scratch memory.
++constexpr uint64_t kNullZeroSize = 0x01000000;
++// The zeroed "null object" page at guest 0x0F000000. A call whose target
++// lands inside it is treated like a call through a null pointer.
++constexpr uint64_t kNullObject = 0x0F000000;
++constexpr uint64_t kNullObjectSize = 0x10000;
++
++uint64_t g_guest_base = 0;
++uint64_t g_null_object = 0;
++uint64_t g_page_size = 0x1000;
++pid_t g_main_thread = 0;
++
++bool CommitReadWrite(uint64_t address, uint64_t size) {
++    return mprotect(reinterpret_cast<void*>(address), size, PROT_READ | PROT_WRITE) == 0;
++}
++
++int64_t SignExtend(uint32_t value, int bits) {
++    return int64_t(uint64_t(value) << (64 - bits)) >> (64 - bits);
++}
++
++// What skipping one A64 load or store does to the registers: whatever a load
++// writes is zeroed, a store-exclusive reports success (status 0), and the
++// pre- and post-indexed forms still move their base register.
++struct Skip {
++    uint32_t zero_x = 0;     // bit n: Xn
++    uint32_t zero_v = 0;     // bit n: Vn
++    uint8_t lane_offset = 0;  // single-lane SIMD loads: only these bytes of each Vn
++    uint8_t lane_bytes = 0;
++    int base = -1;            // register written back, 31 = SP
++    int64_t base_offset = 0;
++};
++
++bool Decode(uint32_t i, const rex::arch::HostThreadContext& c, Skip& s) {
++    const uint32_t rt = i & 31, rn = (i >> 5) & 31, rt2 = (i >> 10) & 31, rs = (i >> 16) & 31;
++    // Register 31 is XZR here: nothing to zero.
++    auto x = [&](uint32_t r) { if (r < 31) s.zero_x |= 1u << r; };
++    auto v = [&](uint32_t r) { s.zero_v |= 1u << (r & 31); };
++
++    // Exclusive, acquire / release and compare-and-swap (no writeback).
++    if ((i & 0x3F000000) == 0x08000000) {
++        const bool o2 = (i >> 23) & 1, load = (i >> 22) & 1, o1 = (i >> 21) & 1;
++        if (o1 && (o2 || !(i >> 31))) {  // CAS, CASP: Rs (Rs+1) get the old value
++            x(rs);
++            if (!o2) x(rs + 1);
++        } else if (load) {  // LDXR, LDAXR, LDXP, LDAXP, LDAR, LDLAR
++            x(rt);
++            if (o1) x(rt2);
++        } else if (!o2) {  // STXR, STLXR, STXP, STLXP
++            x(rs);
++        }
++        return true;
++    }
++
++    // Single register: unsigned offset, unscaled, pre / post-indexed,
++    // register offset, and the LSE atomics.
++    if ((i & 0x3A000000) == 0x38000000) {
++        const uint32_t size = i >> 30, opc = (i >> 22) & 3;
++        if (!((i >> 24) & 1)) {
++            const uint32_t form = (i >> 10) & 3;
++            if ((i >> 21) & 1) {
++                if (form == 0) {  // LDADD, SWP, ... and LDAPR: Rt gets the old value
++                    x(rt);
++                    return true;
++                }
++                if (form != 2) return false;  // LDRAA / LDRAB
++            } else if (form & 1) {  // 01 post-index, 11 pre-index
++                s.base = int(rn);
++                s.base_offset = SignExtend((i >> 12) & 0x1FF, 9);
++            }
++        }
++        if ((i >> 26) & 1) {
++            if (opc & 1) v(rt);
++        } else if (opc != 0 && !(size == 3 && opc == 2)) {  // loads; PRFM loads nothing
++            x(rt);
++        }
++        return true;
++    }
++
++    // Register pair.
++    if ((i & 0x3A000000) == 0x28000000) {
++        const uint32_t opc = i >> 30, type = (i >> 23) & 3;
++        const bool simd = (i >> 26) & 1;
++        if ((i >> 22) & 1) {
++            if (simd) {
++                v(rt);
++                v(rt2);
++            } else {
++                x(rt);
++                x(rt2);
++            }
++        }
++        if (type == 1 || type == 3) {  // post-index, pre-index
++            const int64_t scale = simd ? (4 << opc) : ((opc & 2) ? 8 : 4);
++            s.base = int(rn);
++            s.base_offset = SignExtend((i >> 15) & 0x7F, 7) * scale;
++        }
++        return true;
++    }
++
++    // SIMD structures (LD1-LD4 / ST1-ST4), multiple or single lane.
++    if ((i & 0xBE000000) == 0x0C000000) {
++        const bool q = (i >> 30) & 1, load = (i >> 22) & 1;
++        const uint32_t opcode = (i >> 12) & 15, size = (i >> 10) & 3;
++        uint32_t regs = 0, bytes = 0;
++        if (!((i >> 24) & 1)) {
++            static constexpr uint8_t kRegs[16] = {4, 0, 4, 0, 3, 0, 3, 1, 2, 0, 2, 0, 0, 0, 0, 0};
++            regs = kRegs[opcode];
++            if (!regs) return false;
++            bytes = regs * (q ? 16 : 8);
++        } else {
++            const uint32_t scale = opcode >> 2;  // bits 15:14
++            const uint32_t sbit = (opcode >> 0) & 1;  // S, bit 12
++            regs = ((((opcode >> 1) & 1) << 1) | ((i >> 21) & 1)) + 1;
++            uint32_t esize = 0, index = 0;
++            switch (scale) {
++                case 0: esize = 1; index = (q << 3) | (sbit << 2) | size; break;
++                case 1: esize = 2; index = (q << 2) | (sbit << 1) | (size >> 1); break;
++                case 2:
++                    if (size & 1) { esize = 8; index = q; } else { esize = 4; index = (q << 1) | sbit; }
++                    break;
++                default: esize = 1u << size; break;  // LD1R-LD4R: the whole register
++            }
++            if (scale != 3) {
++                s.lane_offset = uint8_t(index * esize);
++                s.lane_bytes = uint8_t(esize);
++            }
++            bytes = regs * esize;
++        }
++        if (load) {
++            for (uint32_t r = 0; r < regs; ++r) v(rt + r);
++        }
++        if ((i >> 23) & 1) {  // post-index: by the size, or by Rm
++            s.base = int(rn);
++            s.base_offset = rs == 31 ? int64_t(bytes) : int64_t(c.x[rs]);
++        }
++        return true;
++    }
++    return false;
++}
++
++void ApplySkip(Exception* ex, const Skip& s) {
++    rex::arch::HostThreadContext& c = *ex->thread_context();
++    for (uint32_t r = 0; r < 31; ++r) {
++        if ((s.zero_x >> r) & 1) ex->ModifyXRegister(r) = 0;
++    }
++    for (uint32_t r = 0; r < 32; ++r) {
++        if (!((s.zero_v >> r) & 1)) continue;
++        rex::vec128_t& reg = ex->ModifyVRegister(r);
++        if (s.lane_bytes) {
++            std::memset(&reg.u8[s.lane_offset], 0, s.lane_bytes);
++        } else {
++            std::memset(&reg, 0, sizeof(reg));
++        }
++    }
++    if (s.base == 31) {
++        c.sp += uint64_t(s.base_offset);
++    } else if (s.base >= 0) {
++        ex->ModifyXRegister(uint32_t(s.base)) += uint64_t(s.base_offset);
++    }
++    ex->set_resume_pc(c.pc + 4);
++}
++
++// Nothing here or in the SDK handles the fault: let it end the process as it
++// would without handlers (returning would run the instruction again and fault
++// forever).
++bool Unhandled(int signal_number) {
++    signal(signal_number, SIG_DFL);
++    return false;
++}
++
++bool SafetyNet(Exception* ex, void*) {
++    if (ex->code() != Exception::Code::kAccessViolation) {
++        return Unhandled(SIGILL);
++    }
++    rex::arch::HostThreadContext& c = *ex->thread_context();
++
++    // Execution jumped to a null function pointer (or into the null object
++    // page): return to the caller (X30) with X0=0. If the same call site keeps
++    // doing this, return 1 after 20 repeats to break the caller's loop.
++    const uint64_t pc = c.pc;
++    if (pc < 0x10000 || pc - g_null_object < kNullObjectSize) {
++        const uint64_t ret_addr = c.x[30];
++        ex->set_resume_pc(ret_addr);
++        uint64_t& x0 = ex->ModifyXRegister(0);
++        x0 = 0;
++        static uint64_t last_ret_addr = 0;
++        static int repeat_count = 0;
++        if (ret_addr == last_ret_addr) {
++            if (++repeat_count > 20) x0 = 1;
++        } else {
++            last_ret_addr = ret_addr;
++            repeat_count = 0;
++        }
++        return true;
++    }
++
++    // Data aborts only: after an instruction abort elsewhere (a fault on the
++    // program counter itself) there is no instruction to decode.
++    const uint64_t fault_addr = ex->fault_address();
++    if (ex->access_violation_operation() != Exception::AccessViolationOperation::kUnknown ||
++        fault_addr != pc) {
++        if (fault_addr - g_guest_base < kGuestSize) {
++            const uint32_t guest_addr = uint32_t(fault_addr - g_guest_base);
++            if (guest_addr < 0x10000000) {
++                // Low guest addresses are never used legitimately; treat as
++                // null. Inside the zero region, re-commit the 64 KB page (at
++                // most 4 times per page) and retry, since the boot-time commit
++                // can be undone.
++                if (guest_addr < kNullZeroSize) {
++                    constexpr uint8_t kNullZeroRetries = 4;
++                    static uint8_t nullzero_retry[256] = {};
++                    const uint32_t page = guest_addr >> 16;
++                    if (nullzero_retry[page] < kNullZeroRetries &&
++                        CommitReadWrite(fault_addr & ~0xFFFFull, 0x10000)) {
++                        nullzero_retry[page]++;
++                        return true;
++                    }
++                }
++            } else if (guest_addr >= 0x7FC80000 && guest_addr < 0x7FD00000) {
++                // GPU MMIO: the SDK's handler, which already passed on it.
++                return Unhandled(SIGSEGV);
++            } else if (CommitReadWrite(fault_addr & ~(g_page_size - 1), g_page_size)) {
++                // Demand-commit the page and retry. Only the faulting page:
++                // its neighbours may be write-watched by the GPU caches.
++                return true;
++            }
++        }
++        // Skip the instruction, zeroing what it would have loaded.
++        Skip skip;
++        if (Decode(*reinterpret_cast<const uint32_t*>(pc), c, skip)) {
++            ApplySkip(ex, skip);
++            return true;
++        }
++    }
++
++    // Unrecognized: on a worker thread, end that thread instead of letting
++    // the fault take down the process.
++    if (g_main_thread != 0 && gettid() != g_main_thread) {
++        c.sp &= ~uint64_t(15);
++        ex->ModifyXRegister(0) = 0;
++        ex->ModifyXRegister(29) = 0;
++        ex->ModifyXRegister(30) = 0;
++        ex->set_resume_pc(reinterpret_cast<uint64_t>(&pthread_exit));
++        return true;
++    }
++    return Unhandled(SIGSEGV);
++}
++
++// __builtin_trap and __builtin_debugtrap are BRK on AArch64, which raises
++// SIGTRAP (the SDK only handles SIGSEGV and SIGILL). Skipped, like ud2 and
++// int 3 on Windows.
++void OnTrap(int, siginfo_t*, void* context) {
++    auto& mcontext = static_cast<ucontext_t*>(context)->uc_mcontext;
++    if ((*reinterpret_cast<const uint32_t*>(mcontext.pc) & 0xFFE0001Fu) == 0xD4200000u) {
++        mcontext.pc += 4;
++        return;
++    }
++    signal(SIGTRAP, SIG_DFL);
++}
++
++}  // namespace
++
++void InstallGuestSafetyNet(uint8_t* membase) {
++    g_page_size = uint64_t(sysconf(_SC_PAGESIZE));
++    g_guest_base = reinterpret_cast<uint64_t>(membase);
++    // Commit the zero region and the null object page before installing the
++    // handler, so near-null reads never fault in the first place. In 64 KB
++    // chunks so one failure does not lose the whole range.
++    for (uint64_t off = 0; off < kNullZeroSize; off += 0x10000) {
++        CommitReadWrite(g_guest_base + off, 0x10000);
++    }
++    g_null_object = g_guest_base + kNullObject;
++    if (CommitReadWrite(g_null_object, kNullObjectSize)) {
++        std::memset(reinterpret_cast<void*>(g_null_object), 0, kNullObjectSize);
++    }
++    g_main_thread = gettid();
++    rex::arch::ExceptionHandler::Install(SafetyNet, nullptr);
++
++    struct sigaction trap = {};
++    trap.sa_sigaction = OnTrap;
++    trap.sa_flags = SA_SIGINFO;
++    sigemptyset(&trap.sa_mask);
++    sigaction(SIGTRAP, &trap, nullptr);
++}
++
++}  // namespace sr
++
++#else
++
++namespace sr {
++// x86-64 Linux and macOS: not done yet.
++void InstallGuestSafetyNet(uint8_t*) {}
++}  // namespace sr
++
++#endif
+diff --git a/project/src/main.cpp b/project/src/main.cpp
+index 834bad1..63725c9 100644
+--- a/project/src/main.cpp
++++ b/project/src/main.cpp
+@@ -16,6 +16,7 @@
+ #include "perf_monitor.h"
+ #include "profiler.h"
+ #include "wml/mod_loader.h"
++#include "guest_safety_net.h"
+ 
+ #include <rex/cvar.h>
+ #include <rex/filesystem.h>
+@@ -867,6 +868,8 @@ public:
+         InitNullObjectPage(runtime_->memory()->virtual_membase());
+         g_main_thread_id = GetCurrentThreadId();
+         AddVectoredExceptionHandler(1, NullPageHandler);
++#else
++        sr::InstallGuestSafetyNet(runtime_->memory()->virtual_membase());
+ #endif
+         // Code and script mods start once the executable is in memory.
+         wml::Start(runtime_->memory()->virtual_membase());
