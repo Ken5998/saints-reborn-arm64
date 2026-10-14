@@ -55,6 +55,12 @@ fetch() {  # fetch URL SHA256 FOLDER [TAR OPTIONS...]: unpack once into DEST/FOL
 
 fetch "$(field llvm "$arch" url)" "$(field llvm "$arch" sha256)" llvm --strip-components=1
 fetch "$(field sysroot url)" "$(field sysroot sha256)" sysroot
+# Clang finds GCC's C++ headers through the sysroot's lib -> usr/lib link, as
+# sysroot/lib/gcc/aarch64-linux-gnu/14/../../../../include/c++/14. Ninja
+# shortens that to sysroot/include/c++/14, which did not exist, so it took
+# every file as changed and each build recompiled the whole game. This link
+# makes that path real.
+[ -e "$dest/sysroot/include" ] || ln -sfn usr/include "$dest/sysroot/include"
 mkdir -p "$dest/bin"
 if [ "$arch" = aarch64 ]; then
     fetch "$(field cmake aarch64 url)" "$(field cmake aarch64 sha256)" cmake --strip-components=1
