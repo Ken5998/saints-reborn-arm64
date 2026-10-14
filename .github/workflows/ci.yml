@@ -33,9 +33,12 @@ jobs:
     timeout-minutes: 120
     steps:
       # No compilers, CMake or development files, as on ArmadaOS: the pinned
-      # toolchain and sysroot bring them.
-      - name: Install git, Python and the download tools
-        run: dnf install -y --setopt=install_weak_deps=False git python3 curl tar xz file
+      # toolchain and sysroot bring them. The SDK's runtime loads the X11 and
+      # Wayland client libraries, which a desktop like ArmadaOS has.
+      - name: Install git, Python, the download tools and the desktop libraries
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False git python3 curl tar xz
+          libX11-xcb libwayland-client
       - uses: actions/checkout@v5
       - name: Fetch the pinned toolchain
         run: scripts/fetch-toolchain.sh "$RUNNER_TEMP/toolchain"
