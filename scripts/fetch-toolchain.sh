@@ -65,20 +65,27 @@ if [ "$arch" = aarch64 ]; then
 fi
 
 # The LLVM release's ld.lld needs libxml2.so.2, which current distributions
-# (Fedora 44 included) no longer ship. On aarch64 the sysroot has it: bin/ld.lld
-# runs the linker with only those few libraries added, never the sysroot's
-# glibc.
+# (Fedora 44 included) no longer ship, and the sysroot's own pkgconf and
+# wayland-scanner (aarch64 programs the build runs on aarch64) need
+# libpkgconf, libexpat and libxml2. On aarch64 the sysroot has them all:
+# bin/ld.lld, bin/pkgconf and bin/wayland-scanner run those programs with only
+# these few libraries added, never the sysroot's glibc.
 if [ "$arch" = aarch64 ]; then
     libs="$dest/ld-libs"
     mkdir -p "$libs"
-    for lib in libxml2.so.2 libicuuc.so.74 libicudata.so.74 liblzma.so.5; do
+    for lib in libxml2.so.2 libicuuc.so.74 libicudata.so.74 liblzma.so.5 libexpat.so.1 libpkgconf.so.3; do
         ln -sfn "../sysroot/usr/lib/aarch64-linux-gnu/$lib" "$libs/$lib"
     done
-    cat > "$dest/bin/ld.lld" <<WRAPPER
+    for tool in llvm/bin/ld.lld sysroot/usr/bin/pkgconf sysroot/usr/bin/wayland-scanner; do
+        rm -f "$dest/bin/${tool##*/}"
+        cat > "$dest/bin/${tool##*/}" <<WRAPPER
 #!/bin/sh
-LD_LIBRARY_PATH="$libs\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" exec "$dest/llvm/bin/ld.lld" "\$@"
+LD_LIBRARY_PATH="$libs\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" exec "$dest/$tool" "\$@"
 WRAPPER
-    chmod +x "$dest/bin/ld.lld"
+        chmod +x "$dest/bin/${tool##*/}"
+    done
+    "$dest/bin/pkgconf" --version
+    "$dest/bin/wayland-scanner" --version
 else
     ln -sfn ../llvm/bin/ld.lld "$dest/bin/ld.lld"
 fi

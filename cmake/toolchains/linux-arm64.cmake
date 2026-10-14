@@ -5,9 +5,9 @@
 #
 # SR_ARM64_TOOLCHAIN (cache or environment) holds:
 #   llvm/        LLVM 20.1.8 for the build host
-#   sysroot/     the pinned sysroot (toolchain.json), with bin/pkgconf and
-#                bin/wayland-scanner
-#   bin/ld.lld   a linker that runs on this host
+#   sysroot/     the pinned sysroot (toolchain.json)
+#   bin/         ld.lld that runs on this host and, on aarch64, the sysroot's
+#                pkgconf and wayland-scanner made to run here
 # scripts/fetch-toolchain.sh sets it up.
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR aarch64)
@@ -41,13 +41,14 @@ set(ENV{PKG_CONFIG_LIBDIR}
     "${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu/pkgconfig:${CMAKE_SYSROOT}/usr/share/pkgconfig")
 set(ENV{PKG_CONFIG_PATH} "")
 # The sysroot's own pkgconf and wayland-scanner are aarch64 programs: used on
-# an aarch64 host (ArmadaOS has neither), the build host's on x86-64.
+# an aarch64 host (ArmadaOS has neither) through fetch-toolchain.sh's wrappers,
+# the build host's on x86-64.
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-  if(NOT PKG_CONFIG_EXECUTABLE AND EXISTS "${CMAKE_SYSROOT}/bin/pkgconf")
-    set(PKG_CONFIG_EXECUTABLE "${CMAKE_SYSROOT}/bin/pkgconf" CACHE FILEPATH "")
+  if(NOT PKG_CONFIG_EXECUTABLE AND EXISTS "${SR_ARM64_TOOLCHAIN}/bin/pkgconf")
+    set(PKG_CONFIG_EXECUTABLE "${SR_ARM64_TOOLCHAIN}/bin/pkgconf" CACHE FILEPATH "")
   endif()
-  if(NOT WAYLAND_SCANNER AND EXISTS "${CMAKE_SYSROOT}/bin/wayland-scanner")
-    set(WAYLAND_SCANNER "${CMAKE_SYSROOT}/bin/wayland-scanner" CACHE FILEPATH "")
+  if(NOT WAYLAND_SCANNER AND EXISTS "${SR_ARM64_TOOLCHAIN}/bin/wayland-scanner")
+    set(WAYLAND_SCANNER "${SR_ARM64_TOOLCHAIN}/bin/wayland-scanner" CACHE FILEPATH "")
   endif()
 endif()
 
