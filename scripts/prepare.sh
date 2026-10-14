@@ -10,7 +10,9 @@
 #                       patched (its dist/ and build/ folders are left alone)
 # WORKDIR/rexglue-sdk   the patched SDK
 #
-# No game files are involved.
+# Run again, it checks out and patches both again; files that end up the same
+# keep their times (scripts/keep-times.py), so a build afterwards recompiles
+# only what the new patches change. No game files are involved.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,6 +25,8 @@ field() {
 ref="${2:-$(field commit)}"
 sr="$work/SaintsReborn"
 sdk="$work/rexglue-sdk"
+times="$work/.prepare-times.json"
+python3 "$repo/scripts/keep-times.py" save "$times" "$sr" "$sdk"
 
 if [ ! -d "$sr/.git" ]; then
     git clone -q "$(field repository)" "$sr"
@@ -73,3 +77,5 @@ for patch in "$repo"/patches/game/*.patch; do
     git -C "$sr" apply --whitespace=nowarn "$patch"
     echo "Applied ${patch#"$repo"/}"
 done
+
+python3 "$repo/scripts/keep-times.py" restore "$times"

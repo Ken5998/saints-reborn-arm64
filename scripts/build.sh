@@ -14,8 +14,9 @@
 #      about 40 GB free is needed while building
 #
 # Run it again after updating this repository: finished steps are skipped
-# when nothing they depend on changed. The game is DIR/SaintsReborn/dist;
-# nothing made here may be published (it is built from your copy of the game).
+# when nothing they depend on changed, and the game build recompiles only the
+# files a change touches. The game is DIR/SaintsReborn/dist; nothing made
+# here may be published (it is built from your copy of the game).
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,13 +60,14 @@ if done_with prepare "$prepare_key"; then
     echo "Saints Reborn and the SDK already prepared - skipping."
 else
     step "Saints Reborn and the ReXGlue SDK"
-    rm -f "$stamps"/{sdk,codegen}
     "$repo/scripts/prepare.sh" "$dir"
     mark prepare "$prepare_key"
 fi
 
-sdk_key="$prepare_key $(key "$repo/toolchain.json" "$repo/scripts/build-sdk.sh" \
-    "$repo/cmake/toolchains/linux-arm64.cmake")"
+# The SDK, and the code recompiled with it, depend on the SDK patches, not on
+# the game's.
+sdk_key="$(key "$repo/upstream.json" "$repo/scripts/prepare.sh" "$repo"/patches/sdk/*.patch \
+    "$repo/toolchain.json" "$repo/scripts/build-sdk.sh" "$repo/cmake/toolchains/linux-arm64.cmake")"
 if done_with sdk "$sdk_key"; then
     echo "ReXGlue SDK already built - skipping."
 else
@@ -103,7 +105,7 @@ if done_with codegen "$codegen_key" && [ -f "$sr/build/generated/sources.cmake" 
     echo "Recompiled code already generated - skipping."
 else
     step "Recompiling default.xex (PowerPC to C++)"
-    rm -rf "$sr/build/generated"
+    # Files that come out the same are left as they are (and not recompiled).
     (cd "$sr" && LD_LIBRARY_PATH="$sdk/lib" "${run[@]}" "$sdk/bin/rexglue" \
         codegen config/saintsrow_manifest.toml --ignore-stamp)
     mark codegen "$codegen_key"
