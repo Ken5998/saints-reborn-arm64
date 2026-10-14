@@ -1,0 +1,735 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 02:43:51 +0000
+Subject: [PATCH] feat(linux): build saints reborn for linux-arm64
+
+Builds the game with clang for aarch64 against the SDK built for Linux
+with the Vulkan GPU plugin:
+
+- CMake: MinHook, the resources, winmm and winhttp, the linker map,
+  /force:multiple and /STACK, the mod loader launcher, the native mods,
+  co-op and Zombies only on Windows. On ARM64 the code is built for
+  ARMv8.2-A (the LSE atomics the recompiled lwarx/stwcx. compare and
+  swaps use) and the game's SSE code goes through SIMDe to NEON. The
+  SDK's libraries are copied next to the program, which finds them with
+  RPATH $ORIGIN.
+- sr_port.h gives the sources what they take from Windows: the thread
+  id, byte swaps, _stricmp, SwitchToThread, GetModuleHandleW and
+  GetProcAddress for the SDK's libraries, the virtual key codes, and
+  __rdtsc from the ARM64 counter.
+- Controllers come through SDL. The Windows timer resolution, the FMA3
+  runtime switch, TerminateProcess, the focus and second copy checks,
+  the cheat tool watch, the invite key and the key polling of the chat
+  and co-op menus stay Windows only.
+- World Studio, the editor that talks to the game over a Windows named
+  pipe, is off.
+- Lua mods load, but their code hooks (wml.hook) are MinHook detours,
+  x86 only: on ARM64 they log that hooks are not supported yet.
+- stubs.cpp adds the SDK's REX_PHYS_HOST_OFFSET for the 0xE0000000 heap
+  instead of a fixed 4 KB, which Linux does not have.
+
+Online co-op (Epic) is not part of this build.
+---
+ project/CMakeLists.txt           | 72 ++++++++++++++++++++++++--------
+ project/src/chat.cpp             |  1 +
+ project/src/coop_menu.cpp        |  5 +++
+ project/src/discord_presence.cpp |  1 +
+ project/src/main.cpp             | 19 ++++++++-
+ project/src/native_shadow.inc    |  2 +-
+ project/src/online_integrity.cpp | 13 ++++++
+ project/src/online_players.cpp   |  3 ++
+ project/src/perf_monitor.cpp     |  1 +
+ project/src/render_fixes.cpp     | 12 +++++-
+ project/src/render_overlap.inc   |  2 +
+ project/src/sr_port.h            | 64 ++++++++++++++++++++++++++++
+ project/src/stubs.cpp            | 17 +++++---
+ project/src/wml/mod_loader.cpp   | 20 ++++++---
+ project/src/world_studio_off.cpp | 19 +++++++++
+ 15 files changed, 220 insertions(+), 31 deletions(-)
+ create mode 100644 project/src/sr_port.h
+ create mode 100644 project/src/world_studio_off.cpp
+
+diff --git a/project/CMakeLists.txt b/project/CMakeLists.txt
+index d8f26c2..1b3f8fe 100644
+--- a/project/CMakeLists.txt
++++ b/project/CMakeLists.txt
+@@ -54,12 +54,15 @@ add_library(wml_lua STATIC ${WML_LUA_SOURCES})
+ target_include_directories(wml_lua PUBLIC ${lua_SOURCE_DIR})
+ target_compile_definitions(wml_lua PRIVATE _CRT_SECURE_NO_WARNINGS)
+ 
+-add_library(wml_minhook STATIC
+-    ${minhook_SOURCE_DIR}/src/buffer.c
+-    ${minhook_SOURCE_DIR}/src/hook.c
+-    ${minhook_SOURCE_DIR}/src/trampoline.c
+-    ${minhook_SOURCE_DIR}/src/hde/hde64.c)
+-target_include_directories(wml_minhook PUBLIC ${minhook_SOURCE_DIR}/include)
++# MinHook (native mods' function hooks) is x86 Windows only.
++if(WIN32)
++    add_library(wml_minhook STATIC
++        ${minhook_SOURCE_DIR}/src/buffer.c
++        ${minhook_SOURCE_DIR}/src/hook.c
++        ${minhook_SOURCE_DIR}/src/trampoline.c
++        ${minhook_SOURCE_DIR}/src/hde/hde64.c)
++    target_include_directories(wml_minhook PUBLIC ${minhook_SOURCE_DIR}/include)
++endif()
+ 
+ set(SAINTSROW_SOURCES
+     src/main.cpp
+@@ -77,7 +80,6 @@ set(SAINTSROW_SOURCES
+     src/glyphs.cpp
+     src/profiler.cpp
+     src/render_fixes.cpp
+-    src/world_studio_bridge.cpp
+     src/wml/mod_list.cpp
+     src/wml/mod_loader.cpp
+     src/wml/lua_mods.cpp
+@@ -89,8 +91,13 @@ set(SAINTSROW_SOURCES
+     src/keyboard_ui.cpp
+     src/friends_ui.cpp
+     ${REXGLUE_SHARE_DIR}/rex_app.cpp
+-    res/saintsreborn.rc
+ )
++if(WIN32)
++    list(APPEND SAINTSROW_SOURCES res/saintsreborn.rc src/world_studio_bridge.cpp)
++else()
++    # World Studio (the editor) is Windows only.
++    list(APPEND SAINTSROW_SOURCES src/world_studio_off.cpp)
++endif()
+ if(EXISTS "${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp")
+     list(APPEND SAINTSROW_SOURCES ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp)
+ else()
+@@ -116,7 +123,14 @@ target_include_directories(saintsrow PRIVATE
+     ${CMAKE_CURRENT_SOURCE_DIR}/../modding/include
+     ${SR_GENERATED_DIR}
+ )
+-target_link_libraries(saintsrow PRIVATE winmm winhttp rex::runtime rex::gpu-xenos wml_lua wml_minhook wml_zlib)
++target_link_libraries(saintsrow PRIVATE rex::runtime rex::gpu-xenos wml_lua wml_zlib)
++if(WIN32)
++    target_link_libraries(saintsrow PRIVATE winmm winhttp wml_minhook)
++else()
++    target_link_libraries(saintsrow PRIVATE ${CMAKE_DL_LIBS})
++    # The SDK's shared libraries sit next to the executable.
++    set_target_properties(saintsrow PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
++endif()
+ 
+ target_compile_options(saintsrow PRIVATE
+     -fno-strict-aliasing
+@@ -130,7 +144,14 @@ target_compile_options(saintsrow PRIVATE
+     $<$<CONFIG:Release>:-O3>
+     $<$<CONFIG:Release>:-DNDEBUG>
+ )
+-if(NOT MSVC)
++if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
++    # ARM64 handhelds (Snapdragon 865 and newer): ARMv8.2-A, which has the LSE
++    # atomics the recompiled lwarx/stwcx. compare-and-swaps use.
++    set(SR_ARM64_ARCH "armv8.2-a" CACHE STRING "Recompiled code -march on ARM64")
++    target_compile_options(saintsrow PRIVATE -march=${SR_ARM64_ARCH})
++    # The game's own SSE code (_mm_*) goes through SIMDe to NEON (sr_port.h).
++    target_compile_definitions(saintsrow PRIVATE SIMDE_ENABLE_NATIVE_ALIASES)
++elseif(NOT MSVC)
+     # x86-64-v3 (Haswell / Zen and newer: AVX2, BMI2, LZCNT, MOVBE). MOVBE lets
+     # the big-endian guest loads/stores of the recompiled code be one
+     # instruction instead of load + byte swap.
+@@ -176,7 +197,9 @@ if(NOT MSVC)
+         target_compile_options(saintsrow PRIVATE -msse4.1)
+     endif()
+     # saintsrow.map lets the built-in profiler name functions.
+-    target_link_options(saintsrow PRIVATE "LINKER:/MAP:saintsrow.map")
++    if(WIN32)
++        target_link_options(saintsrow PRIVATE "LINKER:/MAP:saintsrow.map")
++    endif()
+ endif()
+ 
+ # Profile-guided optimization of the recompiled code (clang PGO):
+@@ -197,15 +220,27 @@ elseif(SR_PGO STREQUAL "use")
+         -Wno-backend-plugin)
+ endif()
+ 
+-# /force:multiple lets stubs.cpp override the SDK's kernel export implementations.
+-target_link_options(saintsrow PRIVATE "LINKER:/force:multiple" "LINKER:/STACK:16777216")
++if(WIN32)
++    # /force:multiple lets stubs.cpp override the SDK's kernel export implementations.
++    target_link_options(saintsrow PRIVATE "LINKER:/force:multiple" "LINKER:/STACK:16777216")
+ 
+-# Put the SDK's DLLs next to the exe so it also runs from the build folder.
+-add_custom_command(TARGET saintsrow POST_BUILD
+-    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:saintsrow> $<TARGET_FILE_DIR:saintsrow>
+-    COMMAND_EXPAND_LISTS
+-)
++    # Put the SDK's DLLs next to the exe so it also runs from the build folder.
++    add_custom_command(TARGET saintsrow POST_BUILD
++        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:saintsrow> $<TARGET_FILE_DIR:saintsrow>
++        COMMAND_EXPAND_LISTS
++    )
++else()
++    # The executable's own definitions (stubs.cpp) already take precedence over
++    # the SDK's shared libraries; put those next to it.
++    add_custom_command(TARGET saintsrow POST_BUILD
++        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rex::runtime>
++                $<TARGET_FILE:rex::gpu-xenos> $<TARGET_FILE_DIR:saintsrow>
++    )
++endif()
+ 
++# The mod loader launcher, native mods, co-op and Zombies are Windows DLLs and
++# programs; on other systems the game is built without them.
++if(WIN32)
+ # ---------------------------------------------------------------------------
+ # Whompay's Mod Loader launcher
+ # ---------------------------------------------------------------------------
+@@ -255,6 +290,7 @@ set_target_properties(zombies PROPERTIES OUTPUT_NAME "Zombies" PREFIX "")
+ add_custom_command(TARGET zombies POST_BUILD
+     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:zombies>
+             ${CMAKE_CURRENT_SOURCE_DIR}/../core/Zombies/Zombies.dll)
++endif()
+ 
+ # Keyboard/mouse button pictures: setup runs glyphgen on the player's own game
+ # files to make dist/kbm_ui.bin (see tools/glyphgen/README.md).
+diff --git a/project/src/chat.cpp b/project/src/chat.cpp
+index 2116738..4b7dace 100644
+--- a/project/src/chat.cpp
++++ b/project/src/chat.cpp
+@@ -22,6 +22,7 @@
+ #ifdef _WIN32
+ #include <windows.h>
+ #endif
++#include "sr_port.h"
+ 
+ namespace {
+ 
+diff --git a/project/src/coop_menu.cpp b/project/src/coop_menu.cpp
+index dd8e737..d626724 100644
+--- a/project/src/coop_menu.cpp
++++ b/project/src/coop_menu.cpp
+@@ -45,6 +45,7 @@
+ #ifdef _WIN32
+ #include <windows.h>
+ #endif
++#include "sr_port.h"
+ 
+ namespace {
+ 
+@@ -437,7 +438,11 @@ int PollTyping() {
+     return 0;
+   }
+   const bool ctrl = KeyDown(VK_CONTROL);
++#ifdef _WIN32
+   const bool upper = KeyDown(VK_SHIFT) != ((GetKeyState(VK_CAPITAL) & 1) != 0);
++#else
++  const bool upper = KeyDown(VK_SHIFT);
++#endif
+   for (int vk = 'A'; vk <= 'Z'; ++vk)
+     if (Pressed(vk)) {
+       if (ctrl && vk == 'V') AddTyped(Clipboard());
+diff --git a/project/src/discord_presence.cpp b/project/src/discord_presence.cpp
+index 4c87470..970c853 100644
+--- a/project/src/discord_presence.cpp
++++ b/project/src/discord_presence.cpp
+@@ -31,6 +31,7 @@
+ #endif
+ #include <windows.h>
+ #endif
++#include "sr_port.h"
+ 
+ namespace sr {
+ bool PlayerDriving(uint8_t* base);  // kbm.cpp
+diff --git a/project/src/main.cpp b/project/src/main.cpp
+index 7413a03..834bad1 100644
+--- a/project/src/main.cpp
++++ b/project/src/main.cpp
+@@ -26,8 +26,8 @@
+ #include <rex/kernel/init.h>
+ #if REX_HAS_D3D12
+ #include <rex/graphics/d3d12/graphics_system.h>
+-#include <rex/system/gpu_plugin.h>
+ #endif
++#include <rex/system/gpu_plugin.h>
+ #include <rex/audio/sdl/sdl_audio_system.h>
+ #include <rex/input/input_system.h>
+ #include <rex/ui/window.h>
+@@ -40,6 +40,10 @@
+ #include <string>
+ #include <thread>
+ 
++#ifndef _WIN32
++#include <unistd.h>
++#endif
++
+ #ifdef SR_PGO_GEN
+ // Instrumented (PGO "gen") build: the profile is written every 30 s and on
+ // close (the shutdown watchdog may end the process before atexit runs).
+@@ -526,6 +530,7 @@ public:
+         rex::RegisterLogLevelCallback();
+         REXLOG_INFO("Saints Row starting");
+         REXLOG_INFO("  Game directory: {}", game_dir.string());
++#ifdef _WIN32
+         if (FILE* ff = std::fopen("fma_crt", "rb")) {
+             std::fclose(ff);
+             sr_fma_use_crt = true;
+@@ -538,6 +543,7 @@ public:
+             _set_FMA3_enable(0);
+             REXLOG_INFO("fma: C runtime FMA3 path off (crt_fma_soft)");
+         }
++#endif
+         {
+             // What this PC has (weak laptops get lighter defaults, see hw_profile.h).
+             const sr::HwProfile& hw = sr::GetHwProfile();
+@@ -791,7 +797,12 @@ public:
+             rex::cvar::SetFlagByName("draw_resolution_scale_y", sv);
+             REXLOG_INFO("Draw resolution scale: {}x", scale);
+         }
++#ifdef _WIN32
+         REXCVAR_SET(input_backend, "xinput");
++#else
++        // Controllers come through SDL outside Windows.
++        REXCVAR_SET(input_backend, "sdl");
++#endif
+         config.input_factory = REX_INPUT_BACKEND(rex::input::CreateDefaultInputSystem);
+         config.kernel_init = rex::kernel::InitializeKernel;
+ 
+@@ -914,6 +925,7 @@ public:
+         }
+ 
+         app_context().CallInUIThreadDeferred([this]() {
++#ifdef _WIN32
+             // 1 ms Windows timer resolution (as most PC games do). The game's
+             // own Sleep calls (guest 82716020 -> KeDelayExecutionThread ->
+             // ::Sleep) otherwise round up to the default 15.6 ms tick since
+@@ -933,6 +945,7 @@ public:
+                     REXLOG_INFO("Timer resolution: 1 ms {}", r == 0 ? "set" : "NOT set");
+                 }
+             }
++#endif
+             auto main_thread = runtime_->PrepareModuleLaunch();
+             // Persistent shader / pipeline cache (dist\cache\shaders): pipelines
+             // compiled in earlier sessions are created at startup instead of
+@@ -989,7 +1002,11 @@ public:
+             std::this_thread::sleep_for(std::chrono::seconds(5));
+             REXLOG_WARN("Shutdown still not finished after 5 s - ending the process");
+             std::this_thread::sleep_for(std::chrono::milliseconds(200));
++#ifdef _WIN32
+             TerminateProcess(GetCurrentProcess(), 0);
++#else
++            _exit(0);
++#endif
+         }).detach();
+         if (runtime_ && runtime_->kernel_state()) {
+             runtime_->kernel_state()->TerminateTitle();
+diff --git a/project/src/native_shadow.inc b/project/src/native_shadow.inc
+index 8b2455c..1324b73 100644
+--- a/project/src/native_shadow.inc
++++ b/project/src/native_shadow.inc
+@@ -17,7 +17,7 @@
+ // Switches: dist\native_shadow_off = original; dist\native_shadow_verify = on 1 call in 32 per
+ // thread run the original, then the native version on the same input, compare the output
+ // region, keep the original's result; log "NATIVE SHADOW VERIFY".
+-#include <immintrin.h>
++#include "sr_port.h"
+ namespace native_shadow {
+ using u8 = uint8_t; using u16 = uint16_t; using u32 = uint32_t; using u64 = uint64_t; using s16 = int16_t; using s32 = int32_t; using s64 = int64_t;
+ inline u8* G(u8* b, u32 a) { return b + a + REX_PHYS_HOST_OFFSET(a); }
+diff --git a/project/src/online_integrity.cpp b/project/src/online_integrity.cpp
+index 017fd66..07887ef 100644
+--- a/project/src/online_integrity.cpp
++++ b/project/src/online_integrity.cpp
+@@ -35,11 +35,14 @@
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+ 
++#ifdef _WIN32
+ #ifndef WIN32_LEAN_AND_MEAN
+ #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+ #include <tlhelp32.h>
++#endif
++#include "sr_port.h"
+ 
+ #include "wml/mod_loader.h"
+ #include "wml/mod_list.h"
+@@ -50,6 +53,7 @@ namespace {
+ // Mods that ship with the game and don't change how a match plays.
+ const char* const kOnlineSafeMods[] = {"SixtyFPS", "Multiplayer", "WhompaysCoop"};
+ 
++#ifdef _WIN32
+ // Cheat tools / debuggers, matched against lower-case process and module names.
+ const char* const kCheatProcesses[] = {"cheatengine", "cheat engine", "artmoney", "wemod",     "x64dbg",
+                                        "x32dbg",      "ollydbg",      "gamehacker", "squalr",  "reclass",
+@@ -66,6 +70,7 @@ std::string Narrow(const wchar_t* w) {
+   for (; *w; ++w) s.push_back(*w < 128 ? char(*w) : '?');
+   return s;
+ }
++#endif
+ 
+ std::mutex g_reason_mutex;
+ std::string g_static_reason;          // mods / maps / studio (decided at start)
+@@ -80,6 +85,7 @@ void Publish() {
+   rex::cvar::SetFlagByName("online_modded", reason.empty() ? "false" : "true");
+ }
+ 
++#ifdef _WIN32
+ std::string FindCheatTool() {
+   if (IsDebuggerPresent()) return "a debugger is attached";
+   BOOL remote = FALSE;
+@@ -114,6 +120,7 @@ std::string FindCheatTool() {
+   }
+   return {};
+ }
++#endif
+ 
+ // Online notices: shown for 12 s, then taken away. Its own thread, so a slow
+ // cheat-tool scan (Watch) can never leave a notice on screen.
+@@ -137,6 +144,9 @@ void Notices() {
+   }
+ }
+ 
++// The cheat-tool and debugger watch is Windows only (online play over Epic
++// is too).
++#ifdef _WIN32
+ void Watch() {
+   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+   while (g_tool_reason.empty()) {
+@@ -150,6 +160,7 @@ void Watch() {
+     std::this_thread::sleep_for(std::chrono::seconds(5));
+   }
+ }
++#endif
+ 
+ }  // namespace
+ 
+@@ -220,6 +231,8 @@ void sr::StartOnlineIntegrity(const std::filesystem::path& exe_dir) {
+       report(apply(mods));
+     }).detach();
+   }
++#ifdef _WIN32
+   std::thread(Watch).detach();
++#endif
+   std::thread(Notices).detach();
+ }
+diff --git a/project/src/online_players.cpp b/project/src/online_players.cpp
+index c9ca9e4..9b1c904 100644
+--- a/project/src/online_players.cpp
++++ b/project/src/online_players.cpp
+@@ -49,6 +49,7 @@
+ #ifdef _WIN32
+ #include <windows.h>
+ #endif
++#include "sr_port.h"
+ 
+ extern "C" void __imp__sub_822903E8(PPCContext& ctx, uint8_t* base);
+ extern "C" void __imp__sub_823487B8(PPCContext& ctx, uint8_t* base);
+@@ -745,6 +746,7 @@ PPC_FUNC(sub_8236CBD0) {
+ 
+ // F10 accepts a waiting invite (cvar online_invite_from set by the runtime).
+ static void InviteKeyPoll() {
++#ifdef _WIN32
+   static bool was_down = false;
+   const bool down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+   const bool pressed = down && !was_down;
+@@ -755,6 +757,7 @@ static void InviteKeyPoll() {
+   if (pid != GetCurrentProcessId()) return;
+   REXLOG_INFO("Invite: F10 pressed, joining");
+   rex::cvar::SetFlagByName("online_invite_accept", "true");
++#endif
+ }
+ 
+ // The PLAYERS / LOBBIES subtitle (kSubtitle) used to be put back only when
+diff --git a/project/src/perf_monitor.cpp b/project/src/perf_monitor.cpp
+index 193bbc3..a04e983 100644
+--- a/project/src/perf_monitor.cpp
++++ b/project/src/perf_monitor.cpp
+@@ -26,6 +26,7 @@
+ #include <psapi.h>
+ #include <tlhelp32.h>
+ #endif
++#include "sr_port.h"
+ 
+ namespace sr {
+ namespace {
+diff --git a/project/src/render_fixes.cpp b/project/src/render_fixes.cpp
+index 3e332e2..dd5940b 100644
+--- a/project/src/render_fixes.cpp
++++ b/project/src/render_fixes.cpp
+@@ -34,7 +34,7 @@
+ #include <rex/ppc/function.h>
+ 
+ #include <cstdint>
+-#include <intrin.h>
++#include "sr_port.h"
+ #include <cmath>
+ #include <cstdio>
+ #include <cstring>
+@@ -45,15 +45,21 @@
+ #include <chrono>
+ #include <map>
+ #include <rex/system/kernel_state.h>
++#ifdef _WIN32
+ extern "C" __declspec(dllimport) unsigned long long __stdcall GetTickCount64(void);
++#endif
+ #include <unordered_map>
+ #include <vector>
+ #include <string>
+ 
++#ifdef _WIN32
+ extern "C" __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId(void);
++#endif
+ extern "C" uint32_t sr_render_list_cap();
+ extern "C" uint32_t sr_render_list_base(int n);
++#ifdef _WIN32
+ extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int);
++#endif
+ 
+ namespace {
+ 
+@@ -1397,7 +1403,11 @@ PPC_FUNC(sub_82128848) {
+         // wall): log the camera, the loaded chunks and what is drawn, so the
+         // moment lines up with the streaming log.
+         static bool f9_was = false;
++#ifdef _WIN32
+         const bool f9 = (GetAsyncKeyState(0x78) & 0x8000) != 0;
++#else
++        const bool f9 = false;  // key polling is Windows only
++#endif
+         if (f9 && !f9_was) {
+             static int marks = 0;
+             ++marks;
+diff --git a/project/src/render_overlap.inc b/project/src/render_overlap.inc
+index eebd69c..1063941 100644
+--- a/project/src/render_overlap.inc
++++ b/project/src/render_overlap.inc
+@@ -10,7 +10,9 @@
+ //    the render thread has really finished the previous frame (host counters, 2 s safety timeout).
+ //    render_overlap_ab = overlap on/off every 10 s: log "RENDER OVERLAP A/B" (fps per mode, kick waits).
+ extern "C" void __imp__sub_82716D20(PPCContext& ctx, uint8_t* base);
++#ifdef _WIN32
+ extern "C" __declspec(dllimport) int __stdcall SwitchToThread(void);
++#endif
+ namespace render_overlap {
+ int Point() {
+     static const int p = [] {
+diff --git a/project/src/sr_port.h b/project/src/sr_port.h
+new file mode 100644
+index 0000000..ac2a849
+--- /dev/null
++++ b/project/src/sr_port.h
+@@ -0,0 +1,64 @@
++#pragma once
++
++// What the game code needs from the compiler and the system outside Windows
++// x86-64: the SSE intrinsics (on ARM64 SIMDe maps them to NEON; CMake sets
++// SIMDE_ENABLE_NATIVE_ALIASES, since the SDK headers include SIMDe first),
++// __rdtsc, a few Win32 basics, the lookup of functions the SDK libraries
++// export by name, and the Windows key codes the code names (its key polling
++// itself is Windows only).
++
++#include <cstdint>
++
++#if defined(__x86_64__) || defined(_M_X64)
++#include <immintrin.h>
++#if defined(_WIN32)
++#include <intrin.h>
++#endif
++#else
++#include <simde/x86/sse4.1.h>
++// The time stamp counter of the x86 code: the generic timer here, which also
++// ticks at a fixed rate (callers measure its rate against a clock).
++inline uint64_t __rdtsc() {
++    uint64_t ticks;
++    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(ticks));
++    return ticks;
++}
++#endif
++
++#if !defined(_WIN32)
++#include <dlfcn.h>
++#include <sched.h>
++#include <strings.h>
++#include <unistd.h>
++
++#include <cwchar>
++
++#include <rex/win32_shims.h>
++
++using DWORD = uint32_t;
++inline DWORD GetCurrentThreadId() { return DWORD(gettid()); }
++inline uint32_t _byteswap_ulong(uint32_t v) { return __builtin_bswap32(v); }
++inline int _stricmp(const char* a, const char* b) { return strcasecmp(a, b); }
++inline int SwitchToThread() { return sched_yield() == 0; }
++
++// GetModuleHandleW + GetProcAddress on the SDK's libraries, already loaded
++// here as librexruntime.so and librexgpu-xenos.so. Other modules (the
++// Windows-only co-op and Zombies DLLs) are not there.
++using HMODULE = void*;
++inline HMODULE GetModuleHandleW(const wchar_t* name) {
++    const char* library = nullptr;
++    if (name && std::wcscmp(name, L"rexruntime.dll") == 0) library = "librexruntime.so";
++    if (name && std::wcscmp(name, L"rexgpu-xenos.dll") == 0) library = "librexgpu-xenos.so";
++    return library ? dlopen(library, RTLD_LAZY | RTLD_NOLOAD) : nullptr;
++}
++inline void* GetProcAddress(HMODULE module, const char* name) {
++    return module ? dlsym(module, name) : nullptr;
++}
++
++enum : int {
++    VK_BACK = 0x08, VK_RETURN = 0x0D, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_CAPITAL = 0x14,
++    VK_ESCAPE = 0x1B, VK_SPACE = 0x20, VK_UP = 0x26, VK_DOWN = 0x28, VK_NUMPAD0 = 0x60,
++    VK_NUMPAD9 = 0x69, VK_SUBTRACT = 0x6D, VK_DECIMAL = 0x6E, VK_F10 = 0x79, VK_OEM_1 = 0xBA,
++    VK_OEM_MINUS = 0xBD, VK_OEM_PERIOD = 0xBE,
++};
++#endif
+diff --git a/project/src/stubs.cpp b/project/src/stubs.cpp
+index f18f04a..170fd2f 100644
+--- a/project/src/stubs.cpp
++++ b/project/src/stubs.cpp
+@@ -27,8 +27,10 @@
+ #include <thread>
+ #include <unordered_map>
+ 
++#ifdef _WIN32
+ #include <windows.h>
+ #include <tlhelp32.h>
++#endif
+ 
+ // ============================================================================
+ // Helpers
+@@ -36,10 +38,11 @@
+ 
+ namespace {
+ 
+-// Host pointer for a guest virtual address. The 0xE0000000 heap sits 4 KB
+-// further into host memory, matching what the recompiled code does.
++// Host pointer for a guest virtual address. On Windows the 0xE0000000 heap
++// sits 4 KB further into host memory, matching what the recompiled code does
++// (REX_PHYS_HOST_OFFSET; no offset on Linux).
+ inline uint8_t* GuestPtr(uint8_t* base, uint32_t addr) {
+-    return base + addr + (addr >= 0xE0000000u ? 0x1000u : 0u);
++    return base + addr + REX_PHYS_HOST_OFFSET(addr);
+ }
+ 
+ // Big-endian 32-bit guest read that honours the 0xE0000000 host offset.
+@@ -105,8 +108,10 @@ PPC_FUNC(sub_825E54A8) {
+     // In the background, with a second copy on the same PC, run at 30 at
+     // most, so two copies don't fight over the GPU and stall each other.
+     {
+-        static uint32_t focus_check = 0;
+         static bool background = false;
++        static bool other_copy = false;
++#ifdef _WIN32
++        static uint32_t focus_check = 0;
+         if ((focus_check++ & 15) == 0) {
+             HWND fg = GetForegroundWindow();
+             DWORD pid = 0;
+@@ -123,6 +128,7 @@ PPC_FUNC(sub_825E54A8) {
+             }
+             background = now_background;
+         }
++#endif
+         int cap = sr::g_fps_cap.load(std::memory_order_relaxed);
+         // Cutscenes: above 60 fps the player model falls behind (the camera,
+         // dialogue and other actors run on real time, the player on frame
+@@ -142,7 +148,7 @@ PPC_FUNC(sub_825E54A8) {
+         // host tabbing out slowed its whole world (frame times past the
+         // game's own step limit), and the other player's copies of its people
+         // and cars tried to keep walking and jittered.
+-        static bool other_copy = false;
++#ifdef _WIN32
+         if ((focus_check & 511) == 1) {
+             int copies = 0;
+             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+@@ -155,6 +161,7 @@ PPC_FUNC(sub_825E54A8) {
+             }
+             other_copy = copies >= 2;
+         }
++#endif
+         if (background && other_copy && (cap > 30 || cap == 0)) cap = 30;
+         sr::LimitFrameRate(double(cap));
+     }
+diff --git a/project/src/wml/mod_loader.cpp b/project/src/wml/mod_loader.cpp
+index fbe3a60..96c4a9c 100644
+--- a/project/src/wml/mod_loader.cpp
++++ b/project/src/wml/mod_loader.cpp
+@@ -27,9 +27,9 @@
+ #define WIN32_LEAN_AND_MEAN
+ #define NOMINMAX
+ #include <windows.h>
+-#endif
+-
+ #include <MinHook.h>
++#endif
++#include "../sr_port.h"
+ 
+ #include "wml.h"
+ #include "wml_internal.h"
+@@ -411,6 +411,13 @@ int InstallHook(uint32_t guest_address, HostFunction hook, HostFunction* origina
+     return -2;
+   }
+   std::lock_guard<std::mutex> lock(g_hook_mutex);
++#ifndef _WIN32
++  // Hooks are MinHook detours, x86 only; ARM64 has none yet.
++  char text[96];
++  std::snprintf(text, sizeof(text), "Hook at %08X: hooks are not supported on this system yet", guest_address);
++  Log("WML", text);
++  return -5;
++#else
+   if (!g_minhook_ready) {
+     if (MH_Initialize() != MH_OK) return -3;
+     g_minhook_ready = true;
+@@ -431,6 +438,7 @@ int InstallHook(uint32_t guest_address, HostFunction hook, HostFunction* origina
+   g_hook_heads[guest_address] = reinterpret_cast<void*>(hook);
+   if (g_hook_batch) ++g_hooks_queued;
+   return 0;
++#endif
+ }
+ 
+ std::array<std::atomic<bool>, 256> g_keys_taken{};
+@@ -720,12 +728,14 @@ void Start(uint8_t* guest_base) {
+   }
+   const auto start_apply = std::chrono::steady_clock::now();
+   uint32_t queued;
+-  MH_STATUS applied = MH_OK;
++  bool applied = true;
+   {
+     std::lock_guard<std::mutex> lock(g_hook_mutex);
+     g_hook_batch = false;
+     queued = g_hooks_queued;
+-    if (queued && g_minhook_ready) applied = MH_ApplyQueued();
++#ifdef _WIN32
++    if (queued && g_minhook_ready) applied = MH_ApplyQueued() == MH_OK;
++#endif
+   }
+   const auto end = std::chrono::steady_clock::now();
+   Log("WML", "Mods started in " +
+@@ -735,7 +745,7 @@ void Start(uint8_t* guest_base) {
+                  std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     end - start_apply)
+                                     .count()) +
+-                 " ms" + (applied == MH_OK ? "" : ", FAILED") + "): " + timings);
++                 " ms" + (applied ? "" : ", FAILED") + "): " + timings);
+ }
+ 
+ void OnFrame() {
+diff --git a/project/src/world_studio_off.cpp b/project/src/world_studio_off.cpp
+new file mode 100644
+index 0000000..411d400
+--- /dev/null
++++ b/project/src/world_studio_off.cpp
+@@ -0,0 +1,19 @@
++// World Studio (the developer-only world editor) is a Windows program that
++// talks to the game over a Windows named pipe. Elsewhere the game is built
++// without its bridge: everything stays as in a normal launch, where the
++// bridge is off.
++#include "world_studio_bridge.h"
++
++namespace sr::world_studio {
++
++bool EditorHostEnabled() { return false; }
++bool GetGizmoDraw(GizmoDraw&) { return false; }
++void AddMouseWheel(float) {}
++bool BeforeGameFrame(uint8_t*) { return true; }
++void OnPresent(PPCContext&, uint8_t*) {}
++bool OwnsCamera() { return false; }
++bool PlayMode() { return false; }
++void AfterFrameTimer(uint8_t*) {}
++void WriteEditorCamera(uint8_t*) {}
++
++}  // namespace sr::world_studio

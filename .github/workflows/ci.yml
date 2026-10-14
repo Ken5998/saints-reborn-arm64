@@ -1,11 +1,15 @@
-name: ARM64 SDK
+name: ARM64 build
 
 # Builds the ReXGlue SDK the way Saints Reborn uses it (its pinned commit and
 # patches/rexglue-sdk.patch, plus patches/sdk/) for linux-arm64 with the
-# Vulkan backend, two ways: natively on GitHub's ARM64 runner in a bare
-# Fedora 44 (the release ArmadaOS is built on) with only the pinned toolchain,
-# as a handheld would, and cross-compiled on x86-64 Ubuntu as a PC or WSL
-# would. No game files are involved.
+# Vulkan backend, then Saints Reborn itself (patches/game/) against it, two
+# ways: natively on GitHub's ARM64 runner in a bare Fedora 44 (the release
+# ArmadaOS is built on) with only the pinned toolchain, as a handheld would,
+# and cross-compiled on x86-64 Ubuntu as a PC or WSL would.
+#
+# No game files are involved: the game is built with placeholder recompiled
+# code (scripts/placeholder-codegen.py), which checks that everything
+# compiles and links but does not make a game that runs.
 
 on:
   push:
@@ -36,9 +40,14 @@ jobs:
       - name: Check out Saints Reborn and the patched SDK
         env:
           REF: ${{ inputs.ref }}
-        run: scripts/prepare-sdk.sh "$RUNNER_TEMP/work" ${REF:+"$REF"}
+        run: scripts/prepare.sh "$RUNNER_TEMP/work" ${REF:+"$REF"}
       - name: Build the SDK
         run: scripts/build-sdk.sh "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/toolchain"
+      - name: Build the game with placeholder recompiled code
+        run: |
+          scripts/placeholder-codegen.py "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/generated"
+          scripts/build-game.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
+            "$RUNNER_TEMP/toolchain" "$RUNNER_TEMP/generated"
 
   cross:
     runs-on: ubuntu-24.04
@@ -56,6 +65,11 @@ jobs:
       - name: Check out Saints Reborn and the patched SDK
         env:
           REF: ${{ inputs.ref }}
-        run: scripts/prepare-sdk.sh "$RUNNER_TEMP/work" ${REF:+"$REF"}
+        run: scripts/prepare.sh "$RUNNER_TEMP/work" ${REF:+"$REF"}
       - name: Build the SDK
         run: scripts/build-sdk.sh "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/toolchain"
+      - name: Build the game with placeholder recompiled code
+        run: |
+          scripts/placeholder-codegen.py "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk" "$RUNNER_TEMP/generated"
+          scripts/build-game.sh "$RUNNER_TEMP/work/SaintsReborn" "$RUNNER_TEMP/work/rexglue-sdk/out/install/linux-arm64" \
+            "$RUNNER_TEMP/toolchain" "$RUNNER_TEMP/generated"

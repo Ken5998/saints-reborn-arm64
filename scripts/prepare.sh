@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Checks out Saints Reborn and the ReXGlue SDK commit it builds with, applies
 # Saints Reborn's patches/rexglue-sdk.patch to the SDK, then this
-# repository's patches/sdk/*.patch (what linux-arm64 needs on top).
+# repository's patches/sdk/*.patch (what linux-arm64 needs on top), and
+# patches/game/*.patch to Saints Reborn.
 #
-#   scripts/prepare-sdk.sh WORKDIR [SAINTS_REBORN_REF]
+#   scripts/prepare.sh WORKDIR [SAINTS_REBORN_REF]
 #
-# WORKDIR/SaintsReborn  Saints Reborn at the commit in upstream.json (or REF)
+# WORKDIR/SaintsReborn  Saints Reborn at the commit in upstream.json (or REF),
+#                       patched (its dist/ and build/ folders are left alone)
 # WORKDIR/rexglue-sdk   the patched SDK
 #
 # No game files are involved.
@@ -27,6 +29,8 @@ if [ ! -d "$sr/.git" ]; then
 fi
 git -C "$sr" fetch -q origin "$ref" 2>/dev/null || git -C "$sr" fetch -q origin
 git -C "$sr" -c advice.detachedHead=false checkout -q --force "$ref"
+# Files an earlier patch added; checkout --force leaves them.
+git -C "$sr" clean -fdq -- project
 echo "Saints Reborn $(git -C "$sr" rev-parse --short HEAD)"
 
 # The SDK commit Saints Reborn pins, found as its own installer finds it.
@@ -61,5 +65,11 @@ echo "Applied Saints Reborn's patches/rexglue-sdk.patch"
 for patch in "$repo"/patches/sdk/*.patch; do
     [ -e "$patch" ] || continue
     git -C "$sdk" apply --whitespace=nowarn "$patch"
+    echo "Applied ${patch#"$repo"/}"
+done
+
+for patch in "$repo"/patches/game/*.patch; do
+    [ -e "$patch" ] || continue
+    git -C "$sr" apply --whitespace=nowarn "$patch"
     echo "Applied ${patch#"$repo"/}"
 done

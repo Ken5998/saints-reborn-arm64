@@ -6,7 +6,7 @@
 #
 #   scripts/build-sdk.sh SDK TOOLCHAIN [INSTALL]
 #
-# SDK        a tree made by prepare-sdk.sh
+# SDK        a tree made by prepare.sh
 # TOOLCHAIN  a folder made by fetch-toolchain.sh
 # INSTALL    install prefix (default SDK/out/install/linux-arm64)
 #
@@ -33,8 +33,9 @@ for f in "$install/bin/rexglue" "$install"/lib/librexruntime.so "$install"/lib/l
         echo "error: $f was not built" >&2
         exit 1
     fi
-    file -L "$f" | grep -q 'ARM aarch64' || { echo "error: $f is not aarch64" >&2; exit 1; }
-    echo "OK $(file -L "$f" | cut -c1-120)"
+    # ELF machine 183 (0xb7): AArch64.
+    [ "$(od -An -tx1 -j18 -N2 "$f" | tr -d ' \n')" = b700 ] || { echo "error: $f is not aarch64" >&2; exit 1; }
+    echo "OK $f (aarch64)"
 done
 
 run=()

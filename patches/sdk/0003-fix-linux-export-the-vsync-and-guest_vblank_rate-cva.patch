@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 02:42:53 +0000
+Subject: [PATCH] fix(linux): export the vsync and guest_vblank_rate cvars from
+ the gpu plugin
+
+Saints Reborn reads and sets vsync and guest_vblank_rate, which live in
+the GPU plugin. On Windows the plugin exports all its symbols; on Linux
+it is built with hidden visibility, so the game did not link. Those two
+are now exported with default visibility.
+---
+ include/rex/graphics/flags.h | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+index 1e43481..b9fffb5 100644
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -14,8 +14,15 @@
+ #include <rex/cvar.h>
+ 
+ // GPU Core
+-REXCVAR_DECLARE(bool, vsync);
+-REXCVAR_DECLARE(double, guest_vblank_rate);
++// The game reads and sets these two in the GPU plugin. On Windows the plugin
++// exports all its symbols; elsewhere only the ones marked for export.
++#if defined(_WIN32)
++#define REX_GPU_CVAR_EXPORT
++#else
++#define REX_GPU_CVAR_EXPORT __attribute__((visibility("default")))
++#endif
++REX_GPU_CVAR_EXPORT REXCVAR_DECLARE(bool, vsync);
++REX_GPU_CVAR_EXPORT REXCVAR_DECLARE(double, guest_vblank_rate);
+ REXCVAR_DECLARE(bool, clear_memory_page_state);
+ REXCVAR_DECLARE(bool, half_pixel_offset);
+ REXCVAR_DECLARE(bool, async_shader_compilation);
