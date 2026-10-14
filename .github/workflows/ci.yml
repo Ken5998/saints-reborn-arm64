@@ -13,8 +13,9 @@ name: ARM64 build
 # compiles and links but does not make a game that runs.
 
 on:
+  # Every branch: work reaches main without pull requests, once this is green.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
     inputs:
