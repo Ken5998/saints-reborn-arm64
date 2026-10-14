@@ -10,10 +10,10 @@ Pinyon Shift.
 **Status:** Saints Reborn builds for linux-arm64: the ReXGlue SDK with Saints
 Reborn's patch and the Vulkan backend, and the game itself. CI checks both
 natively on ARM64 and cross-compiled on x86-64. Built from a disc on the
-Retroid Pocket 6, it starts and reaches the main menu, and the build adds it
-to Steam with its artwork. Next come the Vulkan versions of the fixes Saints
-Reborn made only for D3D12, and a launcher
-([docs/FEASIBILITY.md](docs/FEASIBILITY.md)).
+Retroid Pocket 6, it plays at 20-30 fps at the game's own 720p (see
+[Performance](#performance)), and the build adds it to Steam with its
+artwork. Next come the Vulkan versions of the fixes Saints Reborn made only
+for D3D12, and a launcher ([docs/FEASIBILITY.md](docs/FEASIBILITY.md)).
 
 This repository is an overlay: patches, scripts and CI only. It never
 contains the game, files extracted from your disc, or the code and binaries
@@ -42,7 +42,7 @@ generated from them, and none may be published here.
 | `patches/game/` | Saints Reborn for linux-arm64: the build, the Windows-only parts, and a guest memory safety net for AArch64. |
 | `scripts/build.sh ISO [DIR]` | Everything below, from your disc to a game folder ready to play. |
 | `scripts/fetch-toolchain.sh DEST` | Downloads and checks the toolchain. |
-| `scripts/prepare.sh WORKDIR [REF]` | Checks out Saints Reborn and its SDK commit and applies all the patches. |
+| `scripts/prepare.sh WORKDIR [REF]` | Checks out Saints Reborn and its SDK commit and applies all the patches; files that come out the same keep their times (`scripts/keep-times.py`), so rebuilds stay small. |
 | `scripts/build-sdk.sh SDK TOOLCHAIN` | Builds and installs the SDK for linux-arm64 with Vulkan. |
 | `scripts/build-game.sh SR SDK TOOLCHAIN GENERATED` | Builds the game from the recompiled code. |
 | `scripts/add-to-steam.sh [DIR]` | Adds the built game to Steam with its artwork (`tools/steam_art.cpp` draws it, `scripts/add-to-steam.py` writes the entry). |
@@ -66,6 +66,9 @@ recompiles it and builds it. That needs about 40 GB free and probably a few
 hours on a handheld; run it again to resume, finished steps are skipped. The
 game ends up in `~/.local/share/SaintsReborn-arm64/SaintsReborn/dist`.
 
+To update, pull this repository and run the same command again: only what
+the new patches change is recompiled, which takes minutes rather than hours.
+
 At the end it adds **Saints Reborn** to the Steam library as a non-Steam game
 (native, no Proton) with its artwork, drawn from Saints Reborn's own logo and
 icon. Steam is closed for a moment and started again, since it would
@@ -82,6 +85,34 @@ Turnip **Devel** is the one that gave Pinyon Shift its best performance.
 
 On x86-64 Linux, `build.sh` works the same with `qemu-user` installed (CMake,
 Ninja and `wayland-scanner` too); copy the `dist` folder to the handheld.
+
+## Performance
+
+Saints Row runs at up to **30 fps**, as on the Xbox 360: the game holds
+itself there. Saints Reborn's SixtyFPS mod lifts that to 60, but it needs Lua
+code hooks, which this port does not have yet.
+
+On the Retroid Pocket 6 it played at 20-30 fps at 1280 x 720. ARM64
+handhelds, whose GPU is part of the SoC, now start with lighter defaults:
+
+- **OPTIONS > DISPLAY > Resolution (restart)**: 1280 x 720, the game's own
+  resolution. 2x and 3x cost far too much here (about 10 fps at 2x), and a
+  change applies the next time the game starts.
+- **Shadows**: Low (shadow maps only, without the stencil shadows the CPU
+  builds). **Off** gives the most frame rate; it applies at once.
+- The GPU work is sent once per frame, and Turnip runs without shader
+  preambles (`IR3_SHADER_DEBUG=nopreamble`, as Pinyon Shift's Android build
+  sets on the same GPUs). Launch options in Steam can override that, e.g.
+  `IR3_SHADER_DEBUG= %command%`.
+
+Also pick Turnip **Devel** in Armada Control (see above).
+
+To measure, create an empty file named `perf_log` in the game folder
+(`~/.local/share/SaintsReborn-arm64/SaintsReborn/dist`), play for a couple of
+minutes and look at `saintsrow_sdk.log` there: every 2 seconds a `PERF` line
+gives the frame rate and frame times, the CPU use of the busiest threads and
+the GPU clock against its highest, which tells whether the CPU or the GPU
+holds the frame rate. Delete `perf_log` afterwards.
 
 ## License
 

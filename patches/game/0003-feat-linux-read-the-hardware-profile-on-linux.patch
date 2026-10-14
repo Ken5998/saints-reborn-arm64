@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:07:08 +0000
+Subject: [PATCH] feat(linux): read the hardware profile on linux
+
+The profile was only read on Windows, so on Linux the GPU was unknown and
+the game started at 2x internal resolution with high shadows. Now the CPU
+count, the RAM and the GPU behind the first DRM render node are read: a
+GPU that is not a PCI device is part of the SoC (Adreno on the Retroid
+Pocket 6) and counts as integrated, so it gets the weak GPU defaults (1x,
+shadow maps only, texture cache limits from its memory). AMD GPUs report
+their VRAM; other PCI GPUs stay unknown.
+---
+ project/src/hw_profile.cpp | 76 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 76 insertions(+)
+
+diff --git a/project/src/hw_profile.cpp b/project/src/hw_profile.cpp
+index 51a6057..cd8956f 100644
+--- a/project/src/hw_profile.cpp
++++ b/project/src/hw_profile.cpp
+@@ -7,6 +7,11 @@
+ // SDK has them in the GPU plugin DLL, where drivers ignore them), so they are
+ // also exported from main.cpp, and the adapter with the most dedicated VRAM is
+ // picked here.
++//
++// On Linux the GPU is the one behind the first DRM render node. One that is
++// not a PCI device is part of the SoC (Adreno, Mali, Apple, ... on ARM64
++// handhelds and boards) and shares the system's memory, so it counts as
++// integrated; AMD's report their VRAM; other PCI GPUs stay unknown.
+ 
+ #include "hw_profile.h"
+ 
+@@ -18,6 +23,14 @@
+ #include <windows.h>
+ #include <dxgi1_2.h>
+ #include <d3d12.h>
++#elif defined(__linux__)
++#include <sys/sysinfo.h>
++#include <unistd.h>
++
++#include <cstring>
++#include <filesystem>
++#include <set>
++#include <system_error>
+ #endif
+ 
+ namespace sr {
+@@ -42,6 +55,54 @@ bool HwProfile::weak_gpu() const {
+ 
+ namespace {
+ 
++#if defined(__linux__)
++// The first line of a small sysfs or procfs file ("" if there is none).
++std::string ReadLine(const std::string& path) {
++  std::string line;
++  if (FILE* f = std::fopen(path.c_str(), "rb")) {
++    char buf[256] = {};
++    if (std::fgets(buf, sizeof(buf), f)) line = buf;
++    std::fclose(f);
++  }
++  while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
++  return line;
++}
++
++void DetectLinuxGpu(HwProfile& p) {
++  namespace fs = std::filesystem;
++  for (int minor = 128; minor < 192; ++minor) {
++    const fs::path device = "/sys/class/drm/renderD" + std::to_string(minor) + "/device";
++    std::error_code ec;
++    const fs::path driver = fs::read_symlink(device / "driver", ec);
++    if (ec) continue;
++    const std::string name = driver.filename().string();
++    p.adapter_index = 0;
++    p.adapter_count = 1;
++    p.adapter_name = name;
++    // Device tree devices: the first "compatible" string (e.g. qcom,sm8550-dpu).
++    const std::string compatible = ReadLine((device / "of_node" / "compatible").string());
++    if (!compatible.empty()) p.adapter_name += " (" + compatible + ")";
++    // Only PCI devices have a vendor id.
++    const std::string vendor = ReadLine((device / "vendor").string());
++    if (!vendor.empty()) p.vendor_id = uint32_t(std::strtoul(vendor.c_str(), nullptr, 16));
++    if (vendor.empty()) {
++      p.integrated = true;
++      // What Windows reports as shared memory: half of the RAM.
++      p.shared_mem_mb = p.total_ram_mb / 2;
++    } else if (name == "amdgpu") {
++      const std::string vram = ReadLine((device / "mem_info_vram_total").string());
++      p.dedicated_vram_mb = std::strtoull(vram.c_str(), nullptr, 10) >> 20;
++      const std::string gtt = ReadLine((device / "mem_info_gtt_total").string());
++      p.shared_mem_mb = std::strtoull(gtt.c_str(), nullptr, 10) >> 20;
++      p.integrated = p.dedicated_vram_mb < 512;
++    } else {
++      p.adapter_index = -1;  // unknown: keep the old defaults
++    }
++    return;
++  }
++}
++#endif
++
+ HwProfile Detect() {
+   HwProfile p;
+ #ifdef _WIN32
+@@ -104,6 +165,21 @@ HwProfile Detect() {
+   }
+   // "Dedicated" memory under 512 MB = a carve-out of system RAM (iGPU / APU).
+   p.integrated = p.adapter_index >= 0 && p.dedicated_vram_mb < 512;
++#elif defined(__linux__)
++  p.logical_cpus = uint32_t(std::max(0L, sysconf(_SC_NPROCESSORS_ONLN)));
++  {
++    // Cores: CPUs that share a core (SMT siblings) list the same siblings.
++    std::set<std::string> cores;
++    for (int cpu = 0; cpu < 1024; ++cpu) {
++      const std::string siblings = ReadLine("/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
++                                            "/topology/thread_siblings_list");
++      if (!siblings.empty()) cores.insert(siblings);
++    }
++    p.physical_cores = cores.empty() ? p.logical_cpus : uint32_t(cores.size());
++  }
++  struct sysinfo info {};
++  if (sysinfo(&info) == 0) p.total_ram_mb = (uint64_t(info.totalram) * info.mem_unit) >> 20;
++  DetectLinuxGpu(p);
+ #endif
+   return p;
+ }

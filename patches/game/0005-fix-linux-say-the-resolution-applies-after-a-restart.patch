@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:07:08 +0000
+Subject: [PATCH] fix(linux): say the resolution applies after a restart on
+ vulkan
+
+Only the D3D12 command processor rebuilds itself at a new scale while the
+game runs; with Vulkan the Display > Resolution row now reads
+"Resolution (restart)".
+---
+ project/src/options_menu.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/project/src/options_menu.cpp b/project/src/options_menu.cpp
+index 39b4527..57ac42d 100644
+--- a/project/src/options_menu.cpp
++++ b/project/src/options_menu.cpp
+@@ -183,7 +183,13 @@ struct Row {
+ 
+ std::vector<Row>& Rows() {
+   static std::vector<Row> rows = {
++#ifdef _WIN32
+       {"Resolution",
++#else
++      // Only the D3D12 command processor rebuilds itself at a new scale while
++      // running; with Vulkan the scale (res_scale.txt) applies at start-up.
++      {"Resolution (restart)",
++#endif
+        {"640 x 480 (restart)", "800 x 600 (restart)", "1280 x 720 (native)", "2560 x 1440 (2x)",
+         "3840 x 2160 (3x)"},
+        [] {

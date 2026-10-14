@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:13:09 +0000
+Subject: [PATCH] fix(linux): start in the game's folder however it is launched
+
+The game reads its settings and writes its log by relative path, as from
+the folder Windows starts it in. Started from a terminal elsewhere, it
+wrote them there and did not find them the next time. It now changes to
+the folder of its executable before anything else runs.
+---
+ project/src/main.cpp | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/project/src/main.cpp b/project/src/main.cpp
+index d23501a..447cc0a 100644
+--- a/project/src/main.cpp
++++ b/project/src/main.cpp
+@@ -45,6 +45,24 @@
+ #include <unistd.h>
+ #endif
+ 
++#if defined(__linux__)
++// The game opens its settings (res_scale.txt, shadows.txt, ...), its log and
++// some of its folders by relative path, from the folder Windows starts it in.
++// Start in the exe's folder however it was launched (Steam's shortcut does,
++// a terminal may not). Before any static initializer, since some read
++// settings (options_menu.cpp).
++__attribute__((constructor(101))) static void StartInExeFolder() {
++    char path[4096];
++    const ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
++    if (n <= 0) return;
++    path[n] = '\0';
++    if (char* slash = std::strrchr(path, '/')) {
++        *slash = '\0';
++        if (path[0] && chdir(path) != 0) std::perror("saintsrow: chdir to the game folder");
++    }
++}
++#endif
++
+ #if defined(__linux__) && defined(__aarch64__)
+ #include <cstdlib>
+ namespace {

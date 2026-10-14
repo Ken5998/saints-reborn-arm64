@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:07:08 +0000
+Subject: [PATCH] feat(linux): per-thread cpu, memory and gpu clock in the perf
+ log
+
+With a perf_log file next to the game, the log now also shows on Linux
+the CPU use of each busy thread and the waits per thread (from /proc),
+the resident and available memory, and the GPU clock against its highest
+(devfreq), to tell whether the CPU or the GPU holds the frame rate.
+---
+ project/src/perf_monitor.cpp | 110 ++++++++++++++++++++++++++++++++++-
+ 1 file changed, 108 insertions(+), 2 deletions(-)
+
+diff --git a/project/src/perf_monitor.cpp b/project/src/perf_monitor.cpp
+index a04e983..ab63f48 100644
+--- a/project/src/perf_monitor.cpp
++++ b/project/src/perf_monitor.cpp
+@@ -25,6 +25,12 @@
+ #include <windows.h>
+ #include <psapi.h>
+ #include <tlhelp32.h>
++#elif defined(__linux__)
++#include <dirent.h>
++#include <unistd.h>
++
++#include <cstdlib>
++#include <cstring>
+ #endif
+ #include "sr_port.h"
+ 
+@@ -107,15 +113,99 @@ std::unordered_map<DWORD, ThreadSample> SampleThreads() {
+   CloseHandle(snap);
+   return out;
+ }
++#elif defined(__linux__)
++struct ThreadSample {
++  uint64_t cpu_100ns;
++  std::string name;
++};
++
++// CPU time (user + system) and name of every thread of this process, from
++// /proc/self/task/<tid>/stat; tids are what GetCurrentThreadId returns here.
++std::unordered_map<DWORD, ThreadSample> SampleThreads() {
++  std::unordered_map<DWORD, ThreadSample> out;
++  static const long ticks_per_s = sysconf(_SC_CLK_TCK);
++  DIR* dir = opendir("/proc/self/task");
++  if (!dir || ticks_per_s <= 0) {
++    if (dir) closedir(dir);
++    return out;
++  }
++  while (const dirent* entry = readdir(dir)) {
++    const DWORD tid = DWORD(std::strtoul(entry->d_name, nullptr, 10));
++    if (!tid) continue;
++    char path[64], buf[512] = {};
++    std::snprintf(path, sizeof(path), "/proc/self/task/%lu/stat", (unsigned long)tid);
++    FILE* f = std::fopen(path, "rb");
++    if (!f) continue;
++    const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
++    std::fclose(f);
++    // "tid (name) state ppid ... utime stime ...": the name may hold spaces
++    // and parentheses, so the fields are read after the last ')'.
++    const std::string text(buf, n);
++    const size_t open = text.find('('), close = text.rfind(')');
++    if (open == std::string::npos || close == std::string::npos || close < open) continue;
++    unsigned long long utime = 0, stime = 0;
++    if (std::sscanf(text.c_str() + close + 1, " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu",
++                    &utime, &stime) != 2)
++      continue;
++    out[tid] = {(utime + stime) * 10000000ull / uint64_t(ticks_per_s), text.substr(open + 1, close - open - 1)};
++  }
++  closedir(dir);
++  return out;
++}
++
++// A "Key: value kB" line of /proc/self/status or /proc/meminfo, in MiB (-1 if missing).
++double ProcMiB(const char* file, const char* key) {
++  double mib = -1;
++  if (FILE* f = std::fopen(file, "rb")) {
++    char line[256];
++    const size_t key_length = std::strlen(key);
++    while (std::fgets(line, sizeof(line), f)) {
++      if (std::strncmp(line, key, key_length) == 0 && line[key_length] == ':') {
++        mib = std::strtod(line + key_length + 1, nullptr) / 1024.0;
++        break;
++      }
++    }
++    std::fclose(f);
++  }
++  return mib;
++}
++
++// The GPU's devfreq folder (e.g. /sys/class/devfreq/3d00000.gpu on Snapdragon), "" if none.
++std::string GpuDevfreq() {
++  if (DIR* dir = opendir("/sys/class/devfreq")) {
++    while (const dirent* entry = readdir(dir)) {
++      if (std::strstr(entry->d_name, "gpu")) {
++        std::string path = std::string("/sys/class/devfreq/") + entry->d_name;
++        closedir(dir);
++        return path;
++      }
++    }
++    closedir(dir);
++  }
++  return {};
++}
++
++unsigned long ReadNumber(const std::string& path) {
++  unsigned long value = 0;
++  if (FILE* f = std::fopen(path.c_str(), "rb")) {
++    if (std::fscanf(f, "%lu", &value) != 1) value = 0;
++    std::fclose(f);
++  }
++  return value;
++}
+ #endif
+ 
+ void MonitorLoop() {
+-#ifdef _WIN32
++#if defined(_WIN32) || defined(__linux__)
+   auto prev_threads = SampleThreads();
++#endif
++#ifdef _WIN32
+   PROCESS_MEMORY_COUNTERS_EX previous_memory{};
+   bool have_previous_memory = K32GetProcessMemoryInfo(
+       GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&previous_memory),
+       sizeof(previous_memory)) != FALSE;
++#elif defined(__linux__)
++  const std::string gpu_devfreq = GpuDevfreq();
+ #endif
+   auto prev_time = Clock::now();
+   while (g_running.load()) {
+@@ -166,7 +256,7 @@ void MonitorLoop() {
+       g_waits.clear();
+     }
+ 
+-#ifdef _WIN32
++#if defined(_WIN32) || defined(__linux__)
+     auto threads = SampleThreads();
+     struct Busy {
+       double pct;
+@@ -222,6 +312,8 @@ void MonitorLoop() {
+       }
+     }
+     prev_threads = std::move(threads);
++#endif
++#ifdef _WIN32
+     PROCESS_MEMORY_COUNTERS_EX memory{};
+     if (K32GetProcessMemoryInfo(GetCurrentProcess(),
+                                reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),
+@@ -248,6 +340,20 @@ void MonitorLoop() {
+                     system_memory.ullAvailPhys / (1024.0 * 1024.0));
+       text += part;
+     }
++#elif defined(__linux__)
++    {
++      char part[160];
++      std::snprintf(part, sizeof(part), " | memory resident %.0f MiB | system available %.0f MiB",
++                    ProcMiB("/proc/self/status", "VmRSS"), ProcMiB("/proc/meminfo", "MemAvailable"));
++      text += part;
++      // The GPU clock now and its highest: a GPU held at its top clock is
++      // likely the limit.
++      if (!gpu_devfreq.empty()) {
++        std::snprintf(part, sizeof(part), " | gpu clock %lu / %lu MHz",
++                      ReadNumber(gpu_devfreq + "/cur_freq") / 1000000, ReadNumber(gpu_devfreq + "/max_freq") / 1000000);
++        text += part;
++      }
++    }
+ #endif
+     REXLOG_INFO("{}", text);
+   }

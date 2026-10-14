@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:07:08 +0000
+Subject: [PATCH] perf(linux): match the d3d12 gpu settings on vulkan, turnip
+ without preambles
+
+The Vulkan backend now submits once per frame and allocates the GPU copy
+of guest memory up front, as the game already sets for D3D12. On ARM64
+Linux, IR3_SHADER_DEBUG=nopreamble is set unless the environment has it,
+as Pinyon Shift's Android build does for Turnip on the same Adreno GPUs.
+---
+ project/src/main.cpp | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/project/src/main.cpp b/project/src/main.cpp
+index 63725c9..d23501a 100644
+--- a/project/src/main.cpp
++++ b/project/src/main.cpp
+@@ -45,6 +45,18 @@
+ #include <unistd.h>
+ #endif
+ 
++#if defined(__linux__) && defined(__aarch64__)
++#include <cstdlib>
++namespace {
++// Turnip, Mesa's Vulkan driver for Adreno GPUs, without shader preambles, as
++// Pinyon Shift's Android build sets on the same GPUs: its many small draws,
++// translated by the same GPU code as this game's, ran faster without them.
++// Set before anything loads the driver; a value in the environment (even an
++// empty one) wins.
++[[maybe_unused]] const int g_turnip_no_preamble = setenv("IR3_SHADER_DEBUG", "nopreamble", 0);
++}  // namespace
++#endif
++
+ #ifdef SR_PGO_GEN
+ // Instrumented (PGO "gen") build: the profile is written every 30 s and on
+ // close (the shutdown watchdog may end the process before atexit runs).
+@@ -707,6 +719,9 @@ public:
+             // host GPU submission after each one costs far more than it saves.
+             // Submit once per frame instead.
+             rex::cvar::SetFlagByName("d3d12_submit_on_primary_buffer_end", "false");
++#ifndef _WIN32
++            rex::cvar::SetFlagByName("vulkan_submit_on_primary_buffer_end", "false");
++#endif
+             // Streaming while driving: keep far more textures resident than the
+             // defaults (384/768 MB) instead of deleting and re-creating them,
+             // and allocate the GPU copy of guest memory up front rather than
+@@ -725,6 +740,10 @@ public:
+                 REXLOG_INFO("Texture cache limits: {} / {} MB (GPU budget {} MB)", soft, hard, budget);
+             }
+             rex::cvar::SetFlagByName("d3d12_tiled_shared_memory", "false");
++#ifndef _WIN32
++            // The same for Vulkan (sparse binding instead of tiled resources).
++            rex::cvar::SetFlagByName("vulkan_sparse_shared_memory", "false");
++#endif
+             // Host RAM cache for repeated immutable packfile reads. Grow on
+             // demand, keeping the Xbox guest address space and GPU budgets intact.
+             int ram_cache_mb = 256;
