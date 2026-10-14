@@ -72,7 +72,8 @@ the new patches change is recompiled, which takes minutes rather than hours.
 At the end it adds **Saints Reborn** to the Steam library as a non-Steam game
 (native, no Proton) with its artwork, drawn from Saints Reborn's own logo and
 icon. Steam is closed for a moment and started again, since it would
-otherwise overwrite the new entry. For a game built before this existed:
+otherwise overwrite the new entry; when the entry is already there it is left
+alone, launch options included. For a game built before this existed:
 
 ```bash
 git -C saints-reborn-arm64 pull

@@ -7,7 +7,8 @@ artwork: the portrait and wide capsules, the hero, the logo and the icon.
 
 DIST is the game folder (with saintsrow in it), ARTWORK the folder
 steam_art drew (capsule.png, wide.png, hero.png, logo.png, icon.png).
-Running it again replaces the entry instead of adding a second one.
+Running it again replaces the entry instead of adding a second one, and
+does nothing when the entry and the images are already there.
 
 Steam keeps the library in memory and writes it back when it closes, so a
 running Steam is closed first and started again afterwards.
@@ -117,44 +118,88 @@ def close_steam() -> bool:
     return True
 
 
+def field(entry: dict, key: str):
+    """A field of a shortcut, whatever case Steam wrote its key in."""
+    for k, v in entry.items():
+        if k.lower() == key.lower():
+            return v
+    return None
+
+
+def accounts_configs(home: Path) -> list[Path]:
+    """The config folders of the accounts that signed in (not the anonymous 0)."""
+    return [user / "config" for root in steam_roots(home) for user in sorted((root / "userdata").iterdir())
+            if user.is_dir() and user.name.isdigit() and user.name != "0"]
+
+
+def is_ours(entry: dict, exe: str) -> bool:
+    return field(entry, "AppName") == NAME or field(entry, "Exe") == exe
+
+
+def up_to_date(home: Path, dist: Path, artwork: Path) -> bool:
+    """Whether every account already has the entry as add() writes it and
+    the same images, so there is nothing to do (and no reason to close Steam)."""
+    exe = f'"{dist / "saintsrow"}"'
+    unsigned = app_id(exe, NAME)
+    configs = accounts_configs(home)
+    for config in configs:
+        path = config / "shortcuts.vdf"
+        try:
+            entries = [e for e in parse_vdf(path.read_bytes())[0].get("shortcuts", {}).values()
+                       if isinstance(e, dict) and is_ours(e, exe)]
+        except (OSError, ValueError, IndexError):
+            return False
+        wanted = {"appid": struct.unpack("<i", struct.pack("<I", unsigned))[0], "AppName": NAME, "Exe": exe,
+                  "StartDir": f'"{dist}"', "icon": str(artwork / "icon.png")}
+        if len(entries) != 1 or any(field(entries[0], k) != v for k, v in wanted.items()):
+            return False
+        for source, name in GRID:
+            image = config / "grid" / name.format(unsigned)
+            if (artwork / source).is_file() and (
+                    not image.is_file() or image.read_bytes() != (artwork / source).read_bytes()):
+                return False
+    return bool(configs)
+
+
 def add(home: Path, dist: Path, artwork: Path) -> int:
     """Writes the entry and the images for every account; returns how many."""
     exe = f'"{dist / "saintsrow"}"'
     unsigned = app_id(exe, NAME)
     signed = struct.unpack("<i", struct.pack("<I", unsigned))[0]
     accounts = 0
-    for root in steam_roots(home):
-        for user in sorted((root / "userdata").iterdir()):
-            if not (user.is_dir() and user.name.isdigit() and user.name != "0"):
+    for config in accounts_configs(home):
+        config.mkdir(parents=True, exist_ok=True)
+        path = config / "shortcuts.vdf"
+        shortcuts: dict = {}
+        if path.is_file() and path.stat().st_size:
+            shortcuts = parse_vdf(path.read_bytes())[0].get("shortcuts", {})
+            backup = path.with_name("shortcuts.vdf.saintsreborn-backup")
+            if not backup.exists():
+                shutil.copyfile(path, backup)
+        entry = {
+            "appid": signed, "AppName": NAME, "Exe": exe, "StartDir": f'"{dist}"',
+            "icon": str(artwork / "icon.png"), "ShortcutPath": "", "LaunchOptions": "",
+            "IsHidden": 0, "AllowDesktopConfig": 1, "AllowOverlay": 1, "OpenVR": 0,
+            "Devkit": 0, "DevkitGameID": "", "DevkitOverrideAppID": 0, "LastPlayTime": 0,
+            "FlatpakAppID": "", "tags": {},
+        }
+        # An earlier Saints Reborn entry is replaced, keeping what was set on
+        # it in Steam (launch options, collections, last played).
+        ours = [e for e in shortcuts.values() if is_ours(e, exe)]
+        for key, value in (ours[0] if ours else {}).items():
+            if key.lower() in ("appid", "appname", "exe", "startdir", "icon"):
                 continue
-            config = user / "config"
-            config.mkdir(parents=True, exist_ok=True)
-            path = config / "shortcuts.vdf"
-            shortcuts: dict = {}
-            if path.is_file() and path.stat().st_size:
-                shortcuts = parse_vdf(path.read_bytes())[0].get("shortcuts", {})
-                backup = path.with_name("shortcuts.vdf.saintsreborn-backup")
-                if not backup.exists():
-                    shutil.copyfile(path, backup)
-            # Keep every other entry; drop an earlier Saints Reborn one.
-            entries = [e for e in shortcuts.values()
-                       if e.get("AppName", e.get("appname")) != NAME and e.get("Exe", e.get("exe")) != exe]
-            entries.append({
-                "appid": signed, "AppName": NAME, "Exe": exe, "StartDir": f'"{dist}"',
-                "icon": str(artwork / "icon.png"), "ShortcutPath": "", "LaunchOptions": "",
-                "IsHidden": 0, "AllowDesktopConfig": 1, "AllowOverlay": 1, "OpenVR": 0,
-                "Devkit": 0, "DevkitGameID": "", "DevkitOverrideAppID": 0, "LastPlayTime": 0,
-                "FlatpakAppID": "", "tags": {},
-            })
-            temporary = path.with_name("shortcuts.vdf.tmp")
-            temporary.write_bytes(dump_vdf({"shortcuts": {str(i): e for i, e in enumerate(entries)}}))
-            temporary.replace(path)
-            grid = config / "grid"
-            grid.mkdir(exist_ok=True)
-            for source, name in GRID:
-                if (artwork / source).is_file():
-                    shutil.copyfile(artwork / source, grid / name.format(unsigned))
-            accounts += 1
+            entry[next((k for k in entry if k.lower() == key.lower()), key)] = value
+        entries = [e for e in shortcuts.values() if not is_ours(e, exe)] + [entry]
+        temporary = path.with_name("shortcuts.vdf.tmp")
+        temporary.write_bytes(dump_vdf({"shortcuts": {str(i): e for i, e in enumerate(entries)}}))
+        temporary.replace(path)
+        grid = config / "grid"
+        grid.mkdir(exist_ok=True)
+        for source, name in GRID:
+            if (artwork / source).is_file():
+                shutil.copyfile(artwork / source, grid / name.format(unsigned))
+        accounts += 1
     return accounts
 
 
@@ -168,6 +213,9 @@ def main(argv: list[str]) -> int:
     home = Path.home()
     if not steam_roots(home):
         sys.exit("error: Steam is not set up for this user: start it and sign in once")
+    if up_to_date(home, dist, artwork):
+        print(f"{NAME} is already in Steam with its artwork")
+        return 0
     restart = close_steam()
     try:
         accounts = add(home, dist, artwork)

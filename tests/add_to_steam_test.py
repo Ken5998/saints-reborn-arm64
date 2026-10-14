@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Checks scripts/add-to-steam.py against a made-up Steam folder: the entry
 is added next to the existing ones, a second run replaces it instead of
-adding another, and the artwork lands in the grid folder under the
-shortcut's app id. Steam itself is never started or closed here.
+adding another (keeping launch options set in Steam), the artwork lands in
+the grid folder under the shortcut's app id, and a run with nothing new to
+write leaves Steam alone. Steam itself is never started or closed here.
 
     python3 tests/add_to_steam_test.py
 """
@@ -43,6 +44,7 @@ with tempfile.TemporaryDirectory() as temporary:
              "IsHidden": 0, "tags": {"0": "favorite"}}
     (config / "shortcuts.vdf").write_bytes(steam.dump_vdf({"shortcuts": {"0": other}}))
 
+    check(not steam.up_to_date(home, dist, artwork), "something to do before the first run")
     check(steam.add(home, dist, artwork) == 1, "one account updated, the anonymous one skipped")
     check(steam.add(home, dist, artwork) == 1, "and again")
     data = (config / "shortcuts.vdf").read_bytes()
@@ -63,6 +65,20 @@ with tempfile.TemporaryDirectory() as temporary:
     check((config / "shortcuts.vdf.saintsreborn-backup").read_bytes() ==
           steam.dump_vdf({"shortcuts": {"0": other}}), "the original shortcuts.vdf is backed up once")
     check(steam.dump_vdf(parsed) == data, "parse and dump round-trip")
+
+    check(steam.up_to_date(home, dist, artwork), "nothing to do after a run, so Steam is not closed")
+    parsed["shortcuts"]["1"]["LaunchOptions"] = "IR3_SHADER_DEBUG= %command%"
+    parsed["shortcuts"]["1"]["LastPlayTime"] = 1760000000
+    (config / "shortcuts.vdf").write_bytes(steam.dump_vdf(parsed))
+    check(steam.up_to_date(home, dist, artwork), "launch options and play time set by Steam are not a change")
+    (artwork / "hero.png").write_bytes(b"a new hero")
+    check(not steam.up_to_date(home, dist, artwork), "a new image is")
+    steam.add(home, dist, artwork)
+    entries = list(steam.parse_vdf((config / "shortcuts.vdf").read_bytes())[0]["shortcuts"].values())
+    check(len(entries) == 2 and entries[1]["LaunchOptions"] == "IR3_SHADER_DEBUG= %command%"
+          and entries[1]["LastPlayTime"] == 1760000000, "replacing the entry keeps what Steam set on it")
+    check((grid / f"{expected}_hero.png").read_bytes() == b"a new hero", "and writes the new image")
+    check(steam.up_to_date(home, dist, artwork), "after which there is nothing to do again")
 
 print("all checks passed" if not failures else "SOME CHECKS FAILED")
 sys.exit(1 if failures else 0)
