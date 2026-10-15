@@ -10,7 +10,9 @@ name: ARM64 build
 #
 # No game files are involved: the game is built with placeholder recompiled
 # code (scripts/placeholder-codegen.py), which checks that everything
-# compiles and links but does not make a game that runs.
+# compiles and links but does not make a game that runs. The launcher
+# (launcher/) is built on the ARM64 runner too, and its window opened on a
+# virtual screen.
 
 on:
   # Every branch: work reaches main without pull requests, once this is green.
@@ -104,3 +106,27 @@ jobs:
           HOME="$RUNNER_TEMP/home" scripts/add-to-steam.sh "$RUNNER_TEMP/work"
           ls -l "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config/grid"
           test "$(ls "$RUNNER_TEMP/home/.local/share/Steam/userdata/1/config/grid" | wc -l)" = 5
+
+  launcher:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust, and a virtual screen with OpenGL for the window
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb libgl1-mesa-dri libegl1 libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6
+          command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Test and build the launcher
+        run: |
+          cargo test --release --locked --manifest-path launcher/Cargo.toml
+          scripts/package-launcher.sh out
+          tar -tzvf out/SaintsReborn-Launcher-linux-arm64.tar.gz
+      - name: Open the launcher window
+        run: |
+          # Still open after 10 seconds (timeout ends it with 124): it started.
+          status=0
+          HOME="$RUNNER_TEMP/home" xvfb-run -a -s "-screen 0 860x620x24" \
+            timeout 10 launcher/target/release/saintsreborn-launcher || status=$?
+          test "$status" = 124

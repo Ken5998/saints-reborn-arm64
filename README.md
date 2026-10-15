@@ -10,10 +10,11 @@ Pinyon Shift.
 **Status:** Saints Reborn builds for linux-arm64: the ReXGlue SDK with Saints
 Reborn's patch and the Vulkan backend, and the game itself. CI checks both
 natively on ARM64 and cross-compiled on x86-64. Built from a disc on the
-Retroid Pocket 6, it plays at 20-30 fps at the game's own 720p (see
+Retroid Pocket 6, it plays at 30 fps, the game's own cap (see
 [Performance](#performance)), and the build adds it to Steam with its
-artwork. Next come the Vulkan versions of the fixes Saints Reborn made only
-for D3D12, and a launcher ([docs/FEASIBILITY.md](docs/FEASIBILITY.md)).
+artwork. A [launcher](#with-the-launcher) builds and updates it from a window.
+Next come the Vulkan versions of the fixes Saints Reborn made only for D3D12
+([docs/FEASIBILITY.md](docs/FEASIBILITY.md)).
 
 This repository is an overlay: patches, scripts and CI only. It never
 contains the game, files extracted from your disc, or the code and binaries
@@ -40,7 +41,8 @@ generated from them, and none may be published here.
 | `cmake/toolchains/linux-arm64.cmake` | Builds for aarch64 Linux against that sysroot, natively or from x86-64. |
 | `patches/sdk/` | What linux-arm64 needs on top of Saints Reborn's `patches/rexglue-sdk.patch`. |
 | `patches/game/` | Saints Reborn for linux-arm64: the build, the Windows-only parts, and a guest memory safety net for AArch64. |
-| `scripts/build.sh ISO [DIR]` | Everything below, from your disc to a game folder ready to play. |
+| `launcher/` | The launcher window (Rust, egui): runs `scripts/build.sh` from a fresh copy of this repository, then plays the game or adds it to Steam. |
+| `scripts/build.sh ISO\|- [DIR]` | Everything below, from your disc to a game folder ready to play (`-` reuses the game files already extracted). |
 | `scripts/fetch-toolchain.sh DEST` | Downloads and checks the toolchain. |
 | `scripts/prepare.sh WORKDIR [REF]` | Checks out Saints Reborn and its SDK commit and applies all the patches; files that come out the same keep their times (`scripts/keep-times.py`), so rebuilds stay small. |
 | `scripts/build-sdk.sh SDK TOOLCHAIN` | Builds and installs the SDK for linux-arm64 with Vulkan. |
@@ -48,13 +50,41 @@ generated from them, and none may be published here.
 | `scripts/add-to-steam.sh [DIR]` | Adds the built game to Steam with its artwork (`tools/steam_art.cpp` draws it, `scripts/add-to-steam.py` writes the entry). |
 | `scripts/placeholder-codegen.py SR SDK OUT` | Stand-in recompiled code, so CI can build the game without it (the result does not run). |
 | `scripts/test-safety-net.sh SR SDK TOOLCHAIN` | Checks the safety net with fake guest memory, natively or under qemu. |
-| `.github/workflows/ci.yml` | All of it without game files, natively on an ARM64 runner in Fedora 44 (the base of ArmadaOS) and cross-compiled on x86-64. |
+| `scripts/package-launcher.sh [OUT]` | Builds the launcher and packs it for a release. |
+| `.github/workflows/ci.yml` | All of it without game files, natively on an ARM64 runner in Fedora 44 (the base of ArmadaOS) and cross-compiled on x86-64; the launcher on ARM64, with its window opened on a virtual screen. |
+| `.github/workflows/release.yml` | Publishes the launcher for ARM64 Linux as a release. |
 
 ## Building the game
 
-You need your own Saints Row disc image (Xbox 360). On the handheld (ArmadaOS
-included: only `git`, `python3`, `curl`, `tar` and `xz` are needed), from
-Desktop Mode:
+You need your own Saints Row disc image (Xbox 360), and the handheld needs
+`git`, `python3`, `curl`, `tar` and `xz`, as ArmadaOS has. The build takes
+about 40 GB of space and can take an hour or more, so keep the handheld on
+its charger.
+
+### With the launcher
+
+![The launcher with a disc image found in Downloads](docs/launcher-setup.png)
+
+1. In Desktop Mode, download `SaintsReborn-Launcher-linux-arm64.tar.gz` from
+   [Releases](https://github.com/Ken5998/saints-reborn-arm64/releases/latest)
+   and unpack it.
+2. Start `SaintsReborn/saintsreborn-launcher`. It looks for disc images in
+   your home folder, Downloads, ROM folders and SD cards; **Browse...** picks
+   another one.
+3. Press **Build**. It fetches this repository's scripts and patches and runs
+   `scripts/build.sh` (below); **Details** shows its output. When it is done,
+   **Saints Reborn** is in the Steam library.
+
+![The launcher building the game](docs/launcher-building.png)
+
+Later, **Update** gets the latest fixes and rebuilds only what they change;
+the disc is not read again. **Cancel** or closing the window stops a build,
+and the next one goes on from there. The launcher's log is
+`~/.local/share/SaintsReborn-arm64/launcher.log`.
+
+### From a terminal
+
+In Desktop Mode:
 
 ```bash
 git clone https://github.com/Ken5998/saints-reborn-arm64
@@ -62,9 +92,10 @@ saints-reborn-arm64/scripts/build.sh "/path/to/Saints Row.iso"
 ```
 
 It downloads the toolchain, builds the SDK, extracts the game from the disc,
-recompiles it and builds it. That needs about 40 GB free and probably a few
-hours on a handheld; run it again to resume, finished steps are skipped. The
-game ends up in `~/.local/share/SaintsReborn-arm64/SaintsReborn/dist`.
+recompiles it and builds it; run it again to resume, finished steps are
+skipped. The game ends up in
+`~/.local/share/SaintsReborn-arm64/SaintsReborn/dist`, the same folder the
+launcher uses, so either one can update a game the other built.
 
 To update, pull this repository and run the same command again: only what
 the new patches change is recompiled, which takes minutes rather than hours.

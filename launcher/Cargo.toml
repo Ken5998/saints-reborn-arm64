@@ -1,0 +1,24 @@
+[package]
+name = "saintsreborn-launcher"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Builds Saints Reborn on an ARM64 Linux handheld from the player's own disc, then plays it or adds it to Steam"
+publish = false
+
+[[bin]]
+name = "saintsreborn-launcher"
+path = "src/main.rs"
+
+[dependencies]
+# The same window and file dialog libraries as Saints Reborn's own Setup,
+# drawing with OpenGL: lighter than wgpu, and there on every desktop.
+eframe = { version = "0.34.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+rfd = "0.17.2"
+libc = "0.2"
+
+[profile.release]
+lto = "thin"
+strip = true
+opt-level = "s"

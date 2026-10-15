@@ -9,7 +9,8 @@
 #
 #   scripts/build.sh ISO [DIR]
 #
-# ISO  your Saints Row (Xbox 360) disc image
+# ISO  your Saints Row (Xbox 360) disc image, or - to use the game files an
+#      earlier build extracted (to update)
 # DIR  where everything goes (default ~/.local/share/SaintsReborn-arm64);
 #      about 40 GB free is needed while building
 #
@@ -20,8 +21,9 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-[ $# -ge 1 ] && [ -f "$1" ] || { echo "usage: $0 ISO [DIR]" >&2; exit 2; }
-iso="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+[ $# -ge 1 ] && { [ "$1" = - ] || [ -f "$1" ]; } || { echo "usage: $0 ISO|- [DIR]" >&2; exit 2; }
+iso=-
+[ "$1" = - ] || iso="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 dir="${2:-$HOME/.local/share/SaintsReborn-arm64}"
 mkdir -p "$dir"
 dir="$(cd "$dir" && pwd)"
@@ -79,8 +81,11 @@ fi
 clang=("$tc/llvm/bin/clang++" --target=aarch64-linux-gnu "--sysroot=$tc/sysroot"
        -fuse-ld=lld -static-libstdc++)
 [ ! -e "$tc/bin/ld.lld" ] || clang+=("--ld-path=$tc/bin/ld.lld")
-if [ -f "$game/default.xex" ] && done_with extract "$iso"; then
+if [ -f "$game/default.xex" ] && { [ "$iso" = - ] || done_with extract "$iso"; }; then
     echo "Game files already extracted to $game - skipping."
+elif [ "$iso" = - ]; then
+    echo "error: no game files in $game yet: give your disc image instead of -" >&2
+    exit 1
 else
     step "Extracting the game from $iso (about 6 GB)"
     mkdir -p "$sr/build"
