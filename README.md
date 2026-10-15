@@ -136,6 +136,16 @@ handhelds, whose GPU is part of the SoC, now start with lighter defaults:
   preambles (`IR3_SHADER_DEBUG=nopreamble`, as Pinyon Shift's Android build
   sets on the same GPUs). Launch options in Steam can override that, e.g.
   `IR3_SHADER_DEBUG= %command%`.
+- **OPTIONS > DISPLAY > GPU Tweaks (restart)**: On by default. Three changes
+  from [shiftglue-sdk](https://github.com/arcanite24/shiftglue-sdk), Pinyon
+  Shift's SDK, that took GPU time off it on the same GPU (Adreno 740) with
+  the same image: vertex data is read through one texel buffer instead of a
+  choice among four storage buffers, vertex shaders multiply as plain IEEE
+  floats, and quad lists are drawn as triangle lists. If geometry goes
+  missing or flickers, turn it **Off**.
+- The FPS Counter and other overlays no longer make the window redraw
+  between the game's frames: each redraw ran the upscaling again on the same
+  frame.
 
 Also pick Turnip **Devel** in Armada Control (see above).
 

@@ -1,0 +1,204 @@
+From 6f6702c4c2d5b09f37244bfef708202a0eecf514 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 09:41:40 +0000
+Subject: [PATCH 6/8] perf(vulkan): lighter multiply rule in translated
+ shaders, from shiftglue-sdk
+
+spirv_fast_pixel_math applies the Direct3D 9 multiply rule in pixel
+shaders only where a product comes out NaN and lets the driver fuse
+multiply-adds; spirv_ieee_vertex_math drops the rule in vertex shaders.
+Both are off by default. Ported from shiftglue-sdk (Pinyon Shift's
+SDK), where they were measured on the Adreno 740.
+---
+ .../graphics/pipeline/shader/spirv_builder.h  |  4 ++
+ .../pipeline/shader/spirv_translator.h        |  7 ++++
+ .../pipeline/shader/spirv_builder.cpp         |  8 +++-
+ .../pipeline/shader/spirv_translator.cpp      | 23 +++++++++++
+ .../pipeline/shader/spirv_translator_alu.cpp  | 41 +++++++++++++++----
+ 5 files changed, 74 insertions(+), 9 deletions(-)
+
+diff --git a/include/rex/graphics/pipeline/shader/spirv_builder.h b/include/rex/graphics/pipeline/shader/spirv_builder.h
+index dbd6b01..fb1c1e0 100644
+--- a/include/rex/graphics/pipeline/shader/spirv_builder.h
++++ b/include/rex/graphics/pipeline/shader/spirv_builder.h
+@@ -34,6 +34,10 @@ class SpirvBuilder : public spv::Builder {
+   spv::Id createQuadOp(spv::Op op_code, spv::Id type_id, spv::Id operand1, spv::Id operand2,
+                        spv::Id operand3, spv::Id operand4);
+ 
++  // When set, the NoContraction helpers leave the result undecorated, so the
++  // driver may fuse and reorder (spirv_fast_pixel_math).
++  bool allow_contraction = false;
++
+   spv::Id createNoContractionUnaryOp(spv::Op op_code, spv::Id type_id, spv::Id operand);
+   spv::Id createNoContractionBinOp(spv::Op op_code, spv::Id type_id, spv::Id operand1,
+                                    spv::Id operand2);
+diff --git a/include/rex/graphics/pipeline/shader/spirv_translator.h b/include/rex/graphics/pipeline/shader/spirv_translator.h
+index dce3dbf..1d153c1 100644
+--- a/include/rex/graphics/pipeline/shader/spirv_translator.h
++++ b/include/rex/graphics/pipeline/shader/spirv_translator.h
+@@ -636,6 +636,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   // replaces the value with +0 if the minimum of the two operands is 0. This
+   // must be called with absolute values of operands - use GetAbsoluteOperand!
+   spv::Id ZeroIfAnyOperandIsZero(spv::Id value, spv::Id operand_0_abs, spv::Id operand_1_abs);
++  // The multiply rule under fast pixel math: replacement (+0 by default)
++  // where the product (or the multiply-add) is NaN.
++  spv::Id ZeroIfNan(spv::Id value, int num_components, spv::Id replacement = spv::NoResult);
+   // Conditionally discard the current fragment. Changes the build point.
+   void KillPixel(spv::Id condition, uint8_t memexport_eM_potentially_written_before);
+   // Return type is a rex::bit_count(result.GetUsedResultComponents())-component
+@@ -762,6 +765,10 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   // Is currently writing the empty depth-only pixel shader, such as for depth
+   // and stencil testing with fragment shader interlock.
+   bool is_depth_only_fragment_shader_ = false;
++  // spirv_fast_pixel_math for the current (pixel) shader.
++  bool fast_pixel_math_ = false;
++  // spirv_ieee_vertex_math for the current (vertex) shader: no multiply rule.
++  bool ieee_math_ = false;
+ 
+   std::unique_ptr<SpirvBuilder> builder_;
+ 
+diff --git a/src/graphics/pipeline/shader/spirv_builder.cpp b/src/graphics/pipeline/shader/spirv_builder.cpp
+index fe0aa4e..aeaec96 100644
+--- a/src/graphics/pipeline/shader/spirv_builder.cpp
++++ b/src/graphics/pipeline/shader/spirv_builder.cpp
+@@ -42,14 +42,18 @@ spv::Id SpirvBuilder::createQuadOp(spv::Op op_code, spv::Id type_id, spv::Id ope
+ spv::Id SpirvBuilder::createNoContractionUnaryOp(spv::Op op_code, spv::Id type_id,
+                                                  spv::Id operand) {
+   spv::Id result = createUnaryOp(op_code, type_id, operand);
+-  addDecoration(result, spv::DecorationNoContraction);
++  if (!allow_contraction) {
++    addDecoration(result, spv::DecorationNoContraction);
++  }
+   return result;
+ }
+ 
+ spv::Id SpirvBuilder::createNoContractionBinOp(spv::Op op_code, spv::Id type_id, spv::Id operand1,
+                                                spv::Id operand2) {
+   spv::Id result = createBinOp(op_code, type_id, operand1, operand2);
+-  addDecoration(result, spv::DecorationNoContraction);
++  if (!allow_contraction) {
++    addDecoration(result, spv::DecorationNoContraction);
++  }
+   return result;
+ }
+ 
+diff --git a/src/graphics/pipeline/shader/spirv_translator.cpp b/src/graphics/pipeline/shader/spirv_translator.cpp
+index 1774f97..886990a 100644
+--- a/src/graphics/pipeline/shader/spirv_translator.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator.cpp
+@@ -21,11 +21,29 @@
+ #include <fmt/format.h>
+ 
+ #include <rex/assert.h>
++#include <rex/cvar.h>
+ #include <rex/graphics/pipeline/shader/spirv.h>
+ #include <rex/graphics/pipeline/shader/spirv_translator.h>
+ #include <rex/math.h>
+ #include <rex/string/buffer.h>
+ 
++// From shiftglue-sdk (Pinyon Shift's SDK), measured there on the Adreno 740:
++// without the Direct3D 9 multiply rule a vertex-heavy frame fell from 14.19
++// to 13.87 ms, and fast pixel math took about 4 ms off a 36 ms frame.
++REXCVAR_DEFINE_BOOL(spirv_ieee_vertex_math, false, "GPU",
++                    "Vulkan: vertex shaders multiply as IEEE floats, without the Direct3D 9 "
++                    "rule that 0 * anything = 0 (a compare and a select per product). "
++                    "Products stay unfused, so positions match between passes; a 0 * Inf "
++                    "vertex comes out NaN")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++REXCVAR_DEFINE_BOOL(spirv_fast_pixel_math, false, "GPU",
++                    "Vulkan: in pixel shaders, apply the Direct3D 9 multiply rule (0 * anything "
++                    "= 0) only to products that come out NaN, and let the driver fuse "
++                    "multiply-adds. Less pixel shader work; a NaN operand times a nonzero one "
++                    "also gives 0")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ namespace rex::graphics {
+ 
+ SpirvShaderTranslator::Features::Features(bool all)
+@@ -175,6 +193,11 @@ void SpirvShaderTranslator::StartTranslation() {
+   // TODO(Triang3l): Logger.
+   builder_ = std::make_unique<SpirvBuilder>(features_.spirv_version, (kSpirvMagicToolId << 16) | 1,
+                                             nullptr);
++  // Depth must match between passes, so shaders writing it stay exact.
++  fast_pixel_math_ = REXCVAR_GET(spirv_fast_pixel_math) && is_pixel_shader() &&
++                     !current_shader().writes_depth();
++  builder_->allow_contraction = fast_pixel_math_;
++  ieee_math_ = REXCVAR_GET(spirv_ieee_vertex_math) && is_vertex_shader();
+ 
+   builder_->addCapability(IsSpirvTessEvalShader() ? spv::CapabilityTessellation
+                                                   : spv::CapabilityShader);
+diff --git a/src/graphics/pipeline/shader/spirv_translator_alu.cpp b/src/graphics/pipeline/shader/spirv_translator_alu.cpp
+index 706ac7e..5c50bcd 100644
+--- a/src/graphics/pipeline/shader/spirv_translator_alu.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator_alu.cpp
+@@ -26,6 +26,12 @@ spv::Id SpirvShaderTranslator::ZeroIfAnyOperandIsZero(spv::Id value, spv::Id ope
+                                                       spv::Id operand_1_abs) {
+   EnsureBuildPointAvailable();
+   int num_components = builder_->getNumComponents(value);
++  if (ieee_math_) {
++    return value;
++  }
++  if (fast_pixel_math_) {
++    return ZeroIfNan(value, num_components);
++  }
+   assert_true(builder_->getNumComponents(operand_0_abs) == num_components);
+   assert_true(builder_->getNumComponents(operand_1_abs) == num_components);
+   return builder_->createTriOp(
+@@ -38,6 +44,19 @@ spv::Id SpirvShaderTranslator::ZeroIfAnyOperandIsZero(spv::Id value, spv::Id ope
+       const_float_vectors_0_[num_components - 1], value);
+ }
+ 
++spv::Id SpirvShaderTranslator::ZeroIfNan(spv::Id value, int num_components,
++                                         spv::Id replacement) {
++  // Fast pixel math: a NaN product stands for the 0 * Inf (or 0 * NaN) the
++  // multiply rule makes 0, so it is checked after the multiply instead of
++  // testing the operands before it, leaving multiply-adds free to fuse. It
++  // differs only where a nonzero operand is already NaN, which gives 0 too.
++  return builder_->createTriOp(
++      spv::OpSelect, type_float_vectors_[num_components - 1],
++      builder_->createUnaryOp(spv::OpIsNan, type_bool_vectors_[num_components - 1], value),
++      replacement != spv::NoResult ? replacement : const_float_vectors_0_[num_components - 1],
++      value);
++}
++
+ void SpirvShaderTranslator::KillPixel(spv::Id condition,
+                                       uint8_t memexport_eM_potentially_written_before) {
+   SpirvBuilder::IfBuilder kill_if(condition, spv::SelectionControlMaskNone, *builder_);
+@@ -190,9 +209,11 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
+       spv::Id result = builder_->createNoContractionBinOp(spv::OpFMul, result_type,
+                                                           multiplicands[0], multiplicands[1]);
+       uint32_t multiplicands_different =
+-          used_result_components &
+-          ~instr.vector_operands[0].GetIdenticalComponents(instr.vector_operands[1]);
+-      if (multiplicands_different) {
++          ieee_math_ ? 0u
++                     : used_result_components &
++                           ~instr.vector_operands[0].GetIdenticalComponents(
++                               instr.vector_operands[1]);
++      if (multiplicands_different && !fast_pixel_math_) {
+         // Shader Model 3: +0 or denormal * anything = +-0.
+         spv::Id different_operands[2] = {multiplicands[0], multiplicands[1]};
+         spv::Id different_result = result;
+@@ -272,10 +293,16 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
+       if (instr.vector_opcode == ucode::AluVectorOpcode::kMad) {
+         // Not replacing true `0 + term` with conditional selection of the term
+         // because +0 + -0 should result in +0, not -0.
+-        result = builder_->createNoContractionBinOp(
+-            spv::OpFAdd, result_type, result,
+-            GetOperandComponents(operand_storage[2], instr.vector_operands[2],
+-                                 used_result_components));
++        spv::Id addend = GetOperandComponents(operand_storage[2], instr.vector_operands[2],
++                                              used_result_components);
++        result = builder_->createNoContractionBinOp(spv::OpFAdd, result_type, result, addend);
++        if (multiplicands_different && fast_pixel_math_) {
++          // After the add so the driver can still fuse it: a NaN sum from a
++          // 0 * Inf product is the addend alone.
++          result = ZeroIfNan(result, int(used_result_component_count), addend);
++        }
++      } else if (multiplicands_different && fast_pixel_math_) {
++        result = ZeroIfNan(result, int(used_result_component_count));
+       }
+       return result;
+     }

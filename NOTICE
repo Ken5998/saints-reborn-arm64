@@ -15,6 +15,11 @@ ReXGlue SDK: https://github.com/rexglue/rexglue-sdk
 Copyright (c) 2026, Tom Clay, with portions derived from the Xenia project
 (Copyright (c) 2022, Ben Vanik and Xenia project contributors).
 
+The shader math and shared memory texel buffer changes in patches/sdk (0006,
+0007) are ported from shiftglue-sdk, Pinyon Shift's fork of the ReXGlue SDK:
+https://github.com/arcanite24/shiftglue-sdk, under the same license as the
+ReXGlue SDK.
+
 The Steam artwork is drawn on the player's machine from Saints Reborn's own
 logo and icon (core/SaintsRebornLogo/logo.png, project/res/SaintsReborn.ico),
 read with stb_image (public domain, from the SDK's thirdparty folder); none of

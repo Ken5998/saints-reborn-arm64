@@ -1,0 +1,54 @@
+From c01aa2c8ba14c68fe4462c7f0adf560c1fa977a2 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 09:43:22 +0000
+Subject: [PATCH 8/8] perf(ui): let an imgui overlay repaint only with the
+ guest's frames
+
+ImGuiDrawer asks for a new paint after every one while it has dialogs,
+and each paint runs the guest output effects (FSR, CAS) again even when
+the guest has not drawn a new frame. SetRepaintContinuously(false) lets
+an overlay that only changes with the game's frames skip that.
+---
+ include/rex/ui/imgui_drawer.h | 7 +++++++
+ src/ui/imgui_drawer.cpp       | 2 +-
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/include/rex/ui/imgui_drawer.h b/include/rex/ui/imgui_drawer.h
+index a570fa0..6606999 100644
+--- a/include/rex/ui/imgui_drawer.h
++++ b/include/rex/ui/imgui_drawer.h
+@@ -52,6 +52,12 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
+   // UI thread can skip the round trip entirely.
+   bool HasDialogs() const { return !dialogs_.empty(); }
+ 
++  // While it has dialogs, the drawer asks for a new paint after every one, for
++  // input and animations. An overlay that only changes with the guest's frames
++  // can turn that off: each paint redraws the guest output, effects such as
++  // FSR included, so continuous paints redo that work between guest frames.
++  void SetRepaintContinuously(bool repaint) { repaint_continuously_ = repaint; }
++
+   // SetPresenter may be called from the destructor.
+   void SetPresenter(Presenter* new_presenter);
+   void SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer);
+@@ -123,6 +129,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
+   // reset (for instance, after releasing a touch), so it's not hovering over
+   // anything.
+   bool reset_mouse_position_after_next_frame_ = false;
++  bool repaint_continuously_ = true;
+ 
+   double frame_time_tick_frequency_;
+   uint64_t last_frame_time_ticks_;
+diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
+index f270f3c..cb115c3 100644
+--- a/src/ui/imgui_drawer.cpp
++++ b/src/ui/imgui_drawer.cpp
+@@ -436,7 +436,7 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   // it now if needed.
+   DetachIfLastDialogRemoved();
+ 
+-  if (!dialogs_.empty()) {
++  if (!dialogs_.empty() && repaint_continuously_) {
+     // Repaint (and handle input) continuously if still active. In detached mode
+     // there is no presenter; the app drives repaint via its own present loop.
+     if (presenter_) {

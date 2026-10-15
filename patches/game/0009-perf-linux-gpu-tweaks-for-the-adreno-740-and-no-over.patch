@@ -1,0 +1,112 @@
+From 033c5f7448090240abcad3618c380315866dde75 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 09:44:48 +0000
+Subject: [PATCH] perf(linux): gpu tweaks for the adreno 740 and no overlay
+ repaints between frames
+
+Display > GPU Tweaks (on unless gpu_tweaks_off exists, after a restart)
+turns on what took GPU time off Pinyon Shift on the same SDK and GPU:
+vertex fetches through one texel buffer, vertex shaders without the
+Direct3D 9 multiply rule, and quad lists as triangle lists. The overlay
+(FPS counter, notices) no longer repaints the window between the game's
+frames, which redid the upscaling each time.
+---
+ project/src/fps_overlay.cpp  |  6 ++++++
+ project/src/main.cpp         | 14 ++++++++++++++
+ project/src/options_menu.cpp | 12 +++++++++++-
+ project/src/options_menu.h   |  4 ++++
+ 4 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/project/src/fps_overlay.cpp b/project/src/fps_overlay.cpp
+index de06a82..7998b83 100644
+--- a/project/src/fps_overlay.cpp
++++ b/project/src/fps_overlay.cpp
+@@ -440,6 +440,12 @@ bool FpsOverlay::Initialize(rex::ui::Window* window, rex::ui::GraphicsProvider*
+   // Above the game, below anything else.
+   impl->imgui_drawer = std::make_unique<rex::ui::ImGuiDrawer>(window, 64, SetupFont);
+   impl->imgui_drawer->SetPresenterAndImmediateDrawer(presenter, impl->immediate_drawer.get());
++#ifndef _WIN32
++  // Everything here changes with the game's frames, which paint the window
++  // anyway; repainting between them only redid the upscaling (FSR) on the
++  // same frame.
++  impl->imgui_drawer->SetRepaintContinuously(false);
++#endif
+   impl_ = std::move(impl);
+   return true;
+ }
+diff --git a/project/src/main.cpp b/project/src/main.cpp
+index 2c20d19..e41e44b 100644
+--- a/project/src/main.cpp
++++ b/project/src/main.cpp
+@@ -768,6 +768,20 @@ public:
+ #ifndef _WIN32
+             // The same for Vulkan (sparse binding instead of tiled resources).
+             rex::cvar::SetFlagByName("vulkan_sparse_shared_memory", "false");
++            // Display > GPU Tweaks: what took GPU time off Pinyon Shift on the
++            // same SDK and the Adreno 740 (the Retroid Pocket 6's GPU), each
++            // with the same image there. Vertex fetches read guest memory
++            // through one texel buffer instead of choosing among four storage
++            // buffers (16.7 to 14.2 ms a frame); vertex shaders multiply as
++            // IEEE floats, without the Direct3D 9 rule that 0 * anything = 0
++            // (14.19 to 13.87 ms); quad lists become triangle lists instead of
++            // going through a geometry shader (1.2 of 25 ms).
++            if (sr::GpuTweaks()) {
++                rex::cvar::SetFlagByName("vulkan_shared_memory_texel_buffer", "true");
++                rex::cvar::SetFlagByName("spirv_ieee_vertex_math", "true");
++                rex::cvar::SetFlagByName("force_convert_quad_lists_to_triangle_lists", "true");
++            }
++            REXLOG_INFO("GPU tweaks: {}", sr::GpuTweaks() ? "on" : "off (gpu_tweaks_off)");
+ #endif
+             // Host RAM cache for repeated immutable packfile reads. Grow on
+             // demand, keeping the Xbox guest address space and GPU budgets intact.
+diff --git a/project/src/options_menu.cpp b/project/src/options_menu.cpp
+index 6e90cf4..3d7a6c4 100644
+--- a/project/src/options_menu.cpp
++++ b/project/src/options_menu.cpp
+@@ -19,7 +19,8 @@
+ //   fps_cap.txt, show_fps (file = shown), aspect.txt (4:3 ... 21:9, read at
+ //   start-up; the old widescreen_off file counts as 4:3), mouse_sensitivity.txt,
+ //   aim_assist_off (file = aim assist off), upscaling.txt (bilinear, fsr or
+-//   cas, read at start-up).
++//   cas, read at start-up), gpu_tweaks_off (file = off; Vulkan builds, read at
++//   start-up).
+ 
+ #include "options_menu.h"
+ 
+@@ -295,6 +296,13 @@ std::vector<Row>& Rows() {
+          }
+        },
+        false},
++#ifndef _WIN32
++      // Lighter Vulkan shaders (main.cpp), on unless turned off here.
++      {"GPU Tweaks (restart)", {"Off", "On"},
++       [] { return FileExists("gpu_tweaks_off") ? 0 : 1; },
++       [](int c) { SetFileExists("gpu_tweaks_off", c == 0); },
++       false},
++#endif
+       // The game's own shadow setting (console variable r_shadows at
+       // 0x827D6C90): 2 = shadow maps + CPU-built stencil shadows (the
+       // default), 3 = shadow maps only, 1 = stencil only, 0 = none. Measured at
+@@ -458,6 +466,8 @@ int sr::FrameHeight() { return g_frame_running >= 0 ? kFrames[g_frame_running].h
+ 
+ const char* sr::UpscalingEffect() { return kUpscalings[ReadUpscalingChoice(g_frame_running)].effect; }
+ 
++bool sr::GpuTweaks() { return !FileExists("gpu_tweaks_off"); }
++
+ void sr::SetDefaultResScale(int scale) {
+   if (scale >= 1 && scale <= 3) g_running_scale = scale;
+ }
+diff --git a/project/src/options_menu.h b/project/src/options_menu.h
+index f9f56d0..38c78e3 100644
+--- a/project/src/options_menu.h
++++ b/project/src/options_menu.h
+@@ -41,4 +41,8 @@ int FrameHeight();
+ // Upscaling, after a restart): bilinear, fsr or cas.
+ const char* UpscalingEffect();
+ 
++// Whether the Vulkan GPU tweaks are on for this run (Display > GPU Tweaks,
++// after a restart; the file gpu_tweaks_off turns them off).
++bool GpuTweaks();
++
+ }  // namespace sr
