@@ -108,6 +108,21 @@ handhelds, whose GPU is part of the SoC, now start with lighter defaults:
 
 Also pick Turnip **Devel** in Armada Control (see above).
 
+### Upscaling
+
+The frame is drawn at the resolution above, then stretched to the screen.
+**OPTIONS > DISPLAY > Upscaling (restart)** picks how:
+
+- **Bilinear**: the original, a little soft when stretched (the default at
+  1280 x 720).
+- **FSR 1**: AMD FidelityFX Super Resolution 1, an edge-preserving upscale
+  and sharpening. Sharper on a 1080p screen for a small GPU cost.
+- **CAS**: sharpening only (Contrast Adaptive Sharpening).
+
+**Resolution > 960 x 540 (restart)** (experimental) draws 44 % fewer pixels
+than 1280 x 720 and starts with FSR 1, for when the GPU holds the frame rate.
+If its menus or HUD look wrong, go back to 1280 x 720.
+
 To measure, create an empty file named `perf_log` in the game folder
 (`~/.local/share/SaintsReborn-arm64/SaintsReborn/dist`), play for a couple of
 minutes and look at `saintsrow_sdk.log` there: every 2 seconds a `PERF` line
