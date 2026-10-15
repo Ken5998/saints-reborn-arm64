@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Install Rust
         run: |
           command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -30,7 +32,10 @@ jobs:
           archive=out/SaintsReborn-Launcher-linux-arm64.tar.gz
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' launcher/Cargo.toml | head -1)"
           sha256="$(sha256sum "$archive" | cut -d' ' -f1)"
-          cat > notes.md <<NOTES
+          scripts/release-notes.sh "v$version" > notes.md
+          cat >> notes.md <<NOTES
+          ## Install
+
           The Saints Reborn launcher $version for ARM64 Linux handhelds, such as the Retroid Pocket 6 on ArmadaOS.
 
           On the device, in Desktop Mode: unpack SaintsReborn-Launcher-linux-arm64.tar.gz, start SaintsReborn/saintsreborn-launcher and choose your own Saints Row (Xbox 360) disc image. It fetches this repository's scripts and patches, builds the game on the device (about 40 GB free; keep it on the charger) and adds it to Steam with its artwork. Update gets the latest fixes later. It needs git, Python 3, curl, tar and xz on the device, as ArmadaOS has.
@@ -39,6 +44,7 @@ jobs:
           NOTES
           if gh release view "v$version" > /dev/null 2>&1; then
             gh release upload "v$version" "$archive" --clobber
+            gh release edit "v$version" --notes-file notes.md
           else
             gh release create "v$version" "$archive" --title "Saints Reborn launcher $version for ARM64 Linux" \
               --notes-file notes.md --target "$GITHUB_SHA"
