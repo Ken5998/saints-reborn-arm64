@@ -1,0 +1,30 @@
+From 5e0b4b8372a09f885534b2ab5876c38cb4f446d1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 18:24:35 +0000
+Subject: [PATCH] fix(linux): no framebuffer compression on arm64 so overlays
+ stop flickering
+
+On ARM64 Linux, TU_DEBUG=noubwc is set unless the environment has it:
+with Turnip's UBWC on the game's images, what gamescope draws over the
+game (MangoHud, the Steam overlay and quick access menu) flickers and
+pixelates.
+---
+ project/src/main.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/project/src/main.cpp b/project/src/main.cpp
+index e41e44b..6531671 100644
+--- a/project/src/main.cpp
++++ b/project/src/main.cpp
+@@ -72,6 +72,10 @@ namespace {
+ // Set before anything loads the driver; a value in the environment (even an
+ // empty one) wins.
+ [[maybe_unused]] const int g_turnip_no_preamble = setenv("IR3_SHADER_DEBUG", "nopreamble", 0);
++// Turnip's framebuffer compression (UBWC) on the game's images makes what
++// gamescope draws over it (MangoHud, the Steam overlay and menu) flicker and
++// pixelate. Same rule: a TU_DEBUG in the environment wins, even an empty one.
++[[maybe_unused]] const int g_turnip_no_ubwc = setenv("TU_DEBUG", "noubwc", 0);
+ }  // namespace
+ #endif
+ 
