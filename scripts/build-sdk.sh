@@ -21,7 +21,18 @@ jobs="${JOBS:-$(nproc)}"
 llvm="$SR_ARM64_TOOLCHAIN/llvm/bin"
 export PATH="$SR_ARM64_TOOLCHAIN/bin:$PATH"
 
+# The preset builds for plain armv8-a; ARMv8.2 adds the LSE atomics and
+# RCpc loads its locks and the GPU emulation lean on (every handheld this is
+# for has them), tuned for the RP6's Cortex-A715 class cores.
+arch="-march=armv8.2-a+rcpc -mtune=cortex-a715"
+# rex/version.h carries the configure time, so every run of this script
+# rewrote it and rebuilt what includes it (the SDK's tools, its debug overlay
+# and the game's rex_app.cpp). CMake takes that time from SOURCE_DATE_EPOCH
+# when set: the SDK commit's own time keeps it the same between runs.
+SOURCE_DATE_EPOCH="$(git -C "$sdk" log -1 --format=%ct 2>/dev/null || echo 0)"
+export SOURCE_DATE_EPOCH
 cmake -S "$sdk" --preset linux-arm64 \
+    "-DCMAKE_C_FLAGS=$arch" "-DCMAKE_CXX_FLAGS=$arch" \
     "-DCMAKE_TOOLCHAIN_FILE=$repo/cmake/toolchains/linux-arm64.cmake" \
     "-DCMAKE_C_COMPILER=$llvm/clang" "-DCMAKE_CXX_COMPILER=$llvm/clang++" \
     "-DCMAKE_INSTALL_PREFIX=$install" \
