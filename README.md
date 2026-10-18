@@ -178,8 +178,9 @@ menu can flicker and break into blocks while the game itself looks fine (with
 Force Composite on, the whole screen does). The kernel lets gamescope
 interrupt the game's GPU work to draw them (GPU preemption), and on this
 Adreno 740 the interruption corrupts what gamescope draws. Turning preemption
-off fixes it without costing frame rate. In Desktop Mode, open Konsole and
-run:
+off fixes it without costing frame rate. The launcher shows whether it is on
+and turns it off with **Turn it off** (it asks for your password, the one
+`sudo` takes), then restart. Or, in Desktop Mode, open Konsole and run:
 
 ```bash
 sudo rpm-ostree kargs --append=msm.enable_preemption=0

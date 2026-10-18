@@ -357,3 +357,66 @@ pub fn play(paths: &Paths) -> Result<(), String> {
 pub fn open(url: &str) {
     let _ = Command::new("xdg-open").arg(url).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
+
+/// The kernel option that stops MangoHud and the Steam overlay from
+/// flickering over the game on Adreno GPUs: with GPU preemption on, the msm
+/// driver switches to gamescope's composition in the middle of the game's
+/// frame and what gamescope draws comes out garbled.
+pub const PREEMPTION_OFF: &str = "msm.enable_preemption=0";
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Preemption {
+    /// Not an Adreno GPU (no msm driver) or no rpm-ostree: nothing to offer.
+    Unavailable,
+    /// The running kernel has the option.
+    Off,
+    /// Set for the next boot.
+    OffAfterRestart,
+    /// Still on: the overlays can flicker.
+    On,
+}
+
+pub fn preemption() -> Preemption {
+    if !Path::new("/sys/module/msm").exists() {
+        return Preemption::Unavailable;
+    }
+    let running = fs::read_to_string("/proc/cmdline").unwrap_or_default();
+    if has_argument(&running, PREEMPTION_OFF) {
+        return Preemption::Off;
+    }
+    // The options of the next boot, which reading needs no password for.
+    match Command::new("rpm-ostree").arg("kargs").stdin(Stdio::null()).stderr(Stdio::null()).output() {
+        Ok(out) if out.status.success() => {
+            if has_argument(&String::from_utf8_lossy(&out.stdout), PREEMPTION_OFF) {
+                Preemption::OffAfterRestart
+            } else {
+                Preemption::On
+            }
+        }
+        _ => Preemption::Unavailable,
+    }
+}
+
+fn has_argument(line: &str, argument: &str) -> bool {
+    line.split_whitespace().any(|a| a == argument)
+}
+
+/// Adds the option for the next boots. It changes the system, so pkexec asks
+/// for the user's password (the one sudo takes) first.
+pub fn turn_off_preemption(r: &Runner) -> Result<String, String> {
+    r.run(Command::new("pkexec").args(["rpm-ostree", "kargs", &format!("--append-if-missing={PREEMPTION_OFF}")]))
+        .map_err(|e| format!("{e} (no password given?)"))?;
+    Ok("GPU preemption turns off at the next start: restart the handheld.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PREEMPTION_OFF, has_argument};
+
+    #[test]
+    fn finds_the_kernel_option() {
+        assert!(has_argument("BOOT_IMAGE=/vmlinuz rw msm.enable_preemption=0 quiet", PREEMPTION_OFF));
+        assert!(!has_argument("rw msm.enable_preemption=1 quiet", PREEMPTION_OFF));
+        assert!(!has_argument("rw xmsm.enable_preemption=0", PREEMPTION_OFF));
+    }
+}

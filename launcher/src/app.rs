@@ -1,6 +1,6 @@
 //! The launcher window.
 
-use crate::tasks::{self, Event, Paths, Runner, Settings};
+use crate::tasks::{self, Event, Paths, Preemption, Runner, Settings};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -15,6 +15,7 @@ const LOG_LINES: usize = 4000;
 enum Task {
     Build,
     Steam,
+    Preemption,
 }
 
 pub struct LauncherApp {
@@ -32,6 +33,7 @@ pub struct LauncherApp {
     result: Option<Result<String, String>>,
     show_log: bool,
     error: Option<String>,
+    preemption: Preemption,
 }
 
 impl LauncherApp {
@@ -60,6 +62,7 @@ impl LauncherApp {
             result: None,
             show_log: false,
             error: None,
+            preemption: tasks::preemption(),
         }
     }
 
@@ -90,6 +93,7 @@ impl LauncherApp {
         self.step = match task {
             Task::Build => "Getting the latest scripts and patches".into(),
             Task::Steam => "Adding Saints Reborn to Steam".into(),
+            Task::Preemption => "Turning GPU preemption off (asks for your password)".into(),
         };
         self.progress = None;
         self.running = Some(task);
@@ -100,6 +104,7 @@ impl LauncherApp {
         match task {
             Task::Build => self.runner.spawn(log, move |r| tasks::build(r, &paths, iso, add_to_steam)),
             Task::Steam => self.runner.spawn(log, move |r| tasks::add_to_steam(r, &paths)),
+            Task::Preemption => self.runner.spawn(log, tasks::turn_off_preemption),
         }
     }
 
@@ -127,6 +132,7 @@ impl LauncherApp {
                     }
                     self.result = Some(result);
                     self.free = tasks::free_space(&self.paths.data);
+                    self.preemption = tasks::preemption();
                 }
             }
         }
@@ -159,6 +165,39 @@ impl LauncherApp {
                 );
             }
         });
+    }
+
+    /// GPU preemption on Adreno: MangoHud and the Steam overlay flicker over
+    /// the game until it is off (a kernel option, so for every game).
+    fn preemption_row(&mut self, ui: &mut egui::Ui) {
+        match self.preemption {
+            Preemption::Unavailable => {}
+            Preemption::Off => {
+                ui.label(RichText::new("✔ GPU preemption is off: MangoHud and the Steam overlay draw cleanly.").weak());
+            }
+            Preemption::OffAfterRestart => {
+                ui.label(
+                    RichText::new("GPU preemption turns off at the next start: restart the handheld.").color(GOOD),
+                );
+            }
+            Preemption::On => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("MangoHud and the Steam overlay flicker over the game while GPU preemption is on.");
+                    if ui
+                        .add_enabled(self.running.is_none(), egui::Button::new("Turn it off"))
+                        .on_hover_text(format!(
+                            "Adds the kernel option {} (asks for your password, then restart the handheld). \
+                             Undo: sudo rpm-ostree kargs --delete={}",
+                            tasks::PREEMPTION_OFF,
+                            tasks::PREEMPTION_OFF
+                        ))
+                        .clicked()
+                    {
+                        self.start(Task::Preemption);
+                    }
+                });
+            }
+        }
     }
 
     fn disc_picker(&mut self, ui: &mut egui::Ui) {
@@ -305,6 +344,7 @@ impl eframe::App for LauncherApp {
             );
             ui.add_space(10.0);
             self.game_panel(ui);
+            self.preemption_row(ui);
             ui.add_space(10.0);
             ui.add_enabled_ui(self.running.is_none(), |ui| {
                 self.disc_picker(ui);
