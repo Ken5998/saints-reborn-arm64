@@ -34,13 +34,15 @@ jobs:
           sha256="$(sha256sum "$archive" | cut -d' ' -f1)"
           scripts/release-notes.sh "v$version" > notes.md
           cat >> notes.md <<NOTES
-          ## Install
+          ## Getting Stilwater on the handheld
 
-          The Saints Reborn launcher $version for ARM64 Linux handhelds, such as the Retroid Pocket 6 on ArmadaOS.
+          Unpack SaintsReborn-Launcher-linux-arm64.tar.gz in Desktop Mode and run SaintsReborn/saintsreborn-launcher. It finds your Saints Row (Xbox 360) disc image in Downloads, a ROM folder or the SD card by itself; press **Build** and the recompiled game is compiled on the device. Leave it on the charger with about 40 GB free. When it is done, Saints Reborn is waiting in your Steam library.
 
-          On the device, in Desktop Mode: unpack SaintsReborn-Launcher-linux-arm64.tar.gz, start SaintsReborn/saintsreborn-launcher and choose your own Saints Row (Xbox 360) disc image. It fetches this repository's scripts and patches, builds the game on the device (about 40 GB free; keep it on the charger) and adds it to Steam with its artwork. Update gets the latest fixes later. It needs git, Python 3, curl, tar and xz on the device, as ArmadaOS has.
+          Built before? **Update** rebuilds only what changed and doesn't read the disc again.
 
-          No game files are included. SHA-256: \`$sha256\`
+          The game holds its own 30 fps at 1280 x 720 with GPU Tweaks (OPTIONS > DISPLAY, on by default). If MangoHud or the Steam overlay flickers, **Turn it off** in the launcher disables GPU preemption. Online co-op and Lua code hooks are not in this build yet.
+
+          Launcher SHA-256: \`$sha256\`. Bring your own disc: nothing from the game ships here.
           NOTES
           if gh release view "v$version" > /dev/null 2>&1; then
             gh release upload "v$version" "$archive" --clobber
