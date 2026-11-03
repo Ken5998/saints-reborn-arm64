@@ -2,7 +2,8 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 19:13:09 +0000
-Subject: [PATCH] fix(linux): start in the game's folder however it is launched
+Subject: [PATCH 7/9] fix(linux): start in the game's folder however it is
+ launched
 
 The game reads its settings and writes its log by relative path, as from
 the folder Windows starts it in. Started from a terminal elsewhere, it

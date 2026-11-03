@@ -2,7 +2,7 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 19:07:08 +0000
-Subject: [PATCH] feat(linux): read the hardware profile on linux
+Subject: [PATCH 3/9] feat(linux): read the hardware profile on linux
 
 The profile was only read on Windows, so on Linux the GPU was unknown and
 the game started at 2x internal resolution with high shadows. Now the CPU

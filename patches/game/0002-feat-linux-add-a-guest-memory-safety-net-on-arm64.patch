@@ -2,7 +2,7 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 02:43:52 +0000
-Subject: [PATCH] feat(linux): add a guest memory safety net on arm64
+Subject: [PATCH 2/9] feat(linux): add a guest memory safety net on arm64
 
 On Windows a vectored exception handler (NullPageHandler) lets the game
 survive the bad memory accesses the original console code makes: near
@@ -38,10 +38,10 @@ SDK's exception handler:
  create mode 100644 project/src/guest_safety_net_posix.cpp
 
 diff --git a/project/CMakeLists.txt b/project/CMakeLists.txt
-index 1b3f8fe..064c054 100644
+index 203c53b..20d55a8 100644
 --- a/project/CMakeLists.txt
 +++ b/project/CMakeLists.txt
-@@ -96,7 +96,7 @@ if(WIN32)
+@@ -97,7 +97,7 @@ if(WIN32)
      list(APPEND SAINTSROW_SOURCES res/saintsreborn.rc src/world_studio_bridge.cpp)
  else()
      # World Studio (the editor) is Windows only.

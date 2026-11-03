@@ -2,8 +2,8 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 02:42:53 +0000
-Subject: [PATCH] fix(linux): export the vsync and guest_vblank_rate cvars from
- the gpu plugin
+Subject: [PATCH 3/8] fix(linux): export the vsync and guest_vblank_rate cvars
+ from the gpu plugin
 
 Saints Reborn reads and sets vsync and guest_vblank_rate, which live in
 the GPU plugin. On Windows the plugin exports all its symbols; on Linux

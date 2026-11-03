@@ -1,8 +1,8 @@
-From 033c5f7448090240abcad3618c380315866dde75 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Thu, 15 Oct 2026 09:44:48 +0000
-Subject: [PATCH] perf(linux): gpu tweaks for the adreno 740 and no overlay
+Subject: [PATCH 9/9] perf(linux): gpu tweaks for the adreno 740 and no overlay
  repaints between frames
 
 Display > GPU Tweaks (on unless gpu_tweaks_off exists, after a restart)

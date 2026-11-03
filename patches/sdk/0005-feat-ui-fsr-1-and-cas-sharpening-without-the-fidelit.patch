@@ -1,8 +1,9 @@
-From af27dd58bf2dd39fb4bcb109328f20579de1a15f Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Thu, 15 Oct 2026 08:34:05 +0000
-Subject: [PATCH] feat(ui): fsr 1 and cas sharpening without the fidelityfx sdk
+Subject: [PATCH 5/8] feat(ui): fsr 1 and cas sharpening without the fidelityfx
+ sdk
 
 The spatial FSR 1 (EASU + RCAS) and CAS paths of the presenter only need
 the prebuilt shaders and the constants already in presenter.h, not the

@@ -2,7 +2,7 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 02:43:51 +0000
-Subject: [PATCH] feat(linux): build saints reborn for linux-arm64
+Subject: [PATCH 1/9] feat(linux): build saints reborn for linux-arm64
 
 Builds the game with clang for aarch64 against the SDK built for Linux
 with the Vulkan GPU plugin:
@@ -51,7 +51,7 @@ Online co-op (Epic) is not part of this build.
  create mode 100644 project/src/world_studio_off.cpp
 
 diff --git a/project/CMakeLists.txt b/project/CMakeLists.txt
-index d8f26c2..1b3f8fe 100644
+index bae71e4..203c53b 100644
 --- a/project/CMakeLists.txt
 +++ b/project/CMakeLists.txt
 @@ -54,12 +54,15 @@ add_library(wml_lua STATIC ${WML_LUA_SOURCES})
@@ -76,7 +76,7 @@ index d8f26c2..1b3f8fe 100644
  
  set(SAINTSROW_SOURCES
      src/main.cpp
-@@ -77,7 +80,6 @@ set(SAINTSROW_SOURCES
+@@ -78,7 +81,6 @@ set(SAINTSROW_SOURCES
      src/glyphs.cpp
      src/profiler.cpp
      src/render_fixes.cpp
@@ -84,7 +84,7 @@ index d8f26c2..1b3f8fe 100644
      src/wml/mod_list.cpp
      src/wml/mod_loader.cpp
      src/wml/lua_mods.cpp
-@@ -89,8 +91,13 @@ set(SAINTSROW_SOURCES
+@@ -90,8 +92,13 @@ set(SAINTSROW_SOURCES
      src/keyboard_ui.cpp
      src/friends_ui.cpp
      ${REXGLUE_SHARE_DIR}/rex_app.cpp
@@ -99,7 +99,7 @@ index d8f26c2..1b3f8fe 100644
  if(EXISTS "${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp")
      list(APPEND SAINTSROW_SOURCES ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp)
  else()
-@@ -116,7 +123,14 @@ target_include_directories(saintsrow PRIVATE
+@@ -117,7 +124,14 @@ target_include_directories(saintsrow PRIVATE
      ${CMAKE_CURRENT_SOURCE_DIR}/../modding/include
      ${SR_GENERATED_DIR}
  )
@@ -115,7 +115,7 @@ index d8f26c2..1b3f8fe 100644
  
  target_compile_options(saintsrow PRIVATE
      -fno-strict-aliasing
-@@ -130,7 +144,14 @@ target_compile_options(saintsrow PRIVATE
+@@ -131,7 +145,14 @@ target_compile_options(saintsrow PRIVATE
      $<$<CONFIG:Release>:-O3>
      $<$<CONFIG:Release>:-DNDEBUG>
  )
@@ -131,7 +131,7 @@ index d8f26c2..1b3f8fe 100644
      # x86-64-v3 (Haswell / Zen and newer: AVX2, BMI2, LZCNT, MOVBE). MOVBE lets
      # the big-endian guest loads/stores of the recompiled code be one
      # instruction instead of load + byte swap.
-@@ -176,7 +197,9 @@ if(NOT MSVC)
+@@ -184,7 +205,9 @@ if(NOT MSVC)
          target_compile_options(saintsrow PRIVATE -msse4.1)
      endif()
      # saintsrow.map lets the built-in profiler name functions.
@@ -142,7 +142,7 @@ index d8f26c2..1b3f8fe 100644
  endif()
  
  # Profile-guided optimization of the recompiled code (clang PGO):
-@@ -197,15 +220,27 @@ elseif(SR_PGO STREQUAL "use")
+@@ -205,15 +228,27 @@ elseif(SR_PGO STREQUAL "use")
          -Wno-backend-plugin)
  endif()
  
@@ -177,7 +177,7 @@ index d8f26c2..1b3f8fe 100644
  # ---------------------------------------------------------------------------
  # Whompay's Mod Loader launcher
  # ---------------------------------------------------------------------------
-@@ -255,6 +290,7 @@ set_target_properties(zombies PROPERTIES OUTPUT_NAME "Zombies" PREFIX "")
+@@ -263,6 +298,7 @@ set_target_properties(zombies PROPERTIES OUTPUT_NAME "Zombies" PREFIX "")
  add_custom_command(TARGET zombies POST_BUILD
      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:zombies>
              ${CMAKE_CURRENT_SOURCE_DIR}/../core/Zombies/Zombies.dll)
@@ -198,7 +198,7 @@ index 2116738..4b7dace 100644
  namespace {
  
 diff --git a/project/src/coop_menu.cpp b/project/src/coop_menu.cpp
-index dd8e737..d626724 100644
+index cd9c39b..a61faf2 100644
 --- a/project/src/coop_menu.cpp
 +++ b/project/src/coop_menu.cpp
 @@ -45,6 +45,7 @@
@@ -209,7 +209,7 @@ index dd8e737..d626724 100644
  
  namespace {
  
-@@ -437,7 +438,11 @@ int PollTyping() {
+@@ -443,7 +444,11 @@ int PollTyping() {
      return 0;
    }
    const bool ctrl = KeyDown(VK_CONTROL);
@@ -407,10 +407,10 @@ index 017fd66..07887ef 100644
    std::thread(Notices).detach();
  }
 diff --git a/project/src/online_players.cpp b/project/src/online_players.cpp
-index c9ca9e4..9b1c904 100644
+index e41fe06..75d920e 100644
 --- a/project/src/online_players.cpp
 +++ b/project/src/online_players.cpp
-@@ -49,6 +49,7 @@
+@@ -50,6 +50,7 @@
  #ifdef _WIN32
  #include <windows.h>
  #endif
@@ -418,7 +418,7 @@ index c9ca9e4..9b1c904 100644
  
  extern "C" void __imp__sub_822903E8(PPCContext& ctx, uint8_t* base);
  extern "C" void __imp__sub_823487B8(PPCContext& ctx, uint8_t* base);
-@@ -745,6 +746,7 @@ PPC_FUNC(sub_8236CBD0) {
+@@ -746,6 +747,7 @@ PPC_FUNC(sub_8236CBD0) {
  
  // F10 accepts a waiting invite (cvar online_invite_from set by the runtime).
  static void InviteKeyPoll() {
@@ -426,7 +426,7 @@ index c9ca9e4..9b1c904 100644
    static bool was_down = false;
    const bool down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
    const bool pressed = down && !was_down;
-@@ -755,6 +757,7 @@ static void InviteKeyPoll() {
+@@ -756,6 +758,7 @@ static void InviteKeyPoll() {
    if (pid != GetCurrentProcessId()) return;
    REXLOG_INFO("Invite: F10 pressed, joining");
    rex::cvar::SetFlagByName("online_invite_accept", "true");
@@ -447,7 +447,7 @@ index 193bbc3..a04e983 100644
  namespace sr {
  namespace {
 diff --git a/project/src/render_fixes.cpp b/project/src/render_fixes.cpp
-index 3e332e2..dd5940b 100644
+index 580947c..10f8039 100644
 --- a/project/src/render_fixes.cpp
 +++ b/project/src/render_fixes.cpp
 @@ -34,7 +34,7 @@
@@ -459,10 +459,10 @@ index 3e332e2..dd5940b 100644
  #include <cmath>
  #include <cstdio>
  #include <cstring>
-@@ -45,15 +45,21 @@
- #include <chrono>
+@@ -46,15 +46,21 @@
  #include <map>
  #include <rex/system/kernel_state.h>
+ #include <rex/system/xthread.h>
 +#ifdef _WIN32
  extern "C" __declspec(dllimport) unsigned long long __stdcall GetTickCount64(void);
 +#endif
@@ -481,7 +481,7 @@ index 3e332e2..dd5940b 100644
  
  namespace {
  
-@@ -1397,7 +1403,11 @@ PPC_FUNC(sub_82128848) {
+@@ -1398,7 +1404,11 @@ PPC_FUNC(sub_82128848) {
          // wall): log the camera, the loaded chunks and what is drawn, so the
          // moment lines up with the streaming log.
          static bool f9_was = false;
@@ -578,10 +578,10 @@ index 0000000..ac2a849
 +};
 +#endif
 diff --git a/project/src/stubs.cpp b/project/src/stubs.cpp
-index f18f04a..170fd2f 100644
+index 195b0a9..1cb0d03 100644
 --- a/project/src/stubs.cpp
 +++ b/project/src/stubs.cpp
-@@ -27,8 +27,10 @@
+@@ -28,8 +28,10 @@
  #include <thread>
  #include <unordered_map>
  
@@ -592,7 +592,7 @@ index f18f04a..170fd2f 100644
  
  // ============================================================================
  // Helpers
-@@ -36,10 +38,11 @@
+@@ -37,10 +39,11 @@
  
  namespace {
  
@@ -607,7 +607,7 @@ index f18f04a..170fd2f 100644
  }
  
  // Big-endian 32-bit guest read that honours the 0xE0000000 host offset.
-@@ -105,8 +108,10 @@ PPC_FUNC(sub_825E54A8) {
+@@ -106,8 +109,10 @@ PPC_FUNC(sub_825E54A8) {
      // In the background, with a second copy on the same PC, run at 30 at
      // most, so two copies don't fight over the GPU and stall each other.
      {
@@ -619,7 +619,7 @@ index f18f04a..170fd2f 100644
          if ((focus_check++ & 15) == 0) {
              HWND fg = GetForegroundWindow();
              DWORD pid = 0;
-@@ -123,6 +128,7 @@ PPC_FUNC(sub_825E54A8) {
+@@ -124,6 +129,7 @@ PPC_FUNC(sub_825E54A8) {
              }
              background = now_background;
          }
@@ -627,18 +627,18 @@ index f18f04a..170fd2f 100644
          int cap = sr::g_fps_cap.load(std::memory_order_relaxed);
          // Cutscenes: above 60 fps the player model falls behind (the camera,
          // dialogue and other actors run on real time, the player on frame
-@@ -142,7 +148,7 @@ PPC_FUNC(sub_825E54A8) {
-         // host tabbing out slowed its whole world (frame times past the
-         // game's own step limit), and the other player's copies of its people
-         // and cars tried to keep walking and jittered.
+@@ -146,7 +152,7 @@ PPC_FUNC(sub_825E54A8) {
+         // The process snapshot (several ms with many processes) runs on a
+         // background thread every 3 s instead of on the main thread every 512
+         // frames (perf round 5b). File "copycheck_main" = old main-thread check.
 -        static bool other_copy = false;
 +#ifdef _WIN32
-         if ((focus_check & 511) == 1) {
-             int copies = 0;
-             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-@@ -155,6 +161,7 @@ PPC_FUNC(sub_825E54A8) {
+         static const bool copycheck_main = [] {
+             FILE* f = std::fopen("copycheck_main", "rb");
+             if (f) std::fclose(f);
+@@ -207,6 +213,7 @@ PPC_FUNC(sub_825E54A8) {
              }
-             other_copy = copies >= 2;
+             other_copy = background && copycheck->other_copy.load(std::memory_order_relaxed);
          }
 +#endif
          if (background && other_copy && (cap > 30 || cap == 0)) cap = 30;
