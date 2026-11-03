@@ -31,6 +31,8 @@ generated from them, and none may be published here.
   First Person (the V key), SixtyFPS and Living Stilwater need them. Lua
   mods that read and write game memory or patch game files work.
 - **World Studio**, the Windows editor.
+- **Your own songs in the phone's MP3 player.** Saints Reborn plays them
+  through Windows MCI; here the phone keeps the game's own tracks.
 
 ## What is here
 

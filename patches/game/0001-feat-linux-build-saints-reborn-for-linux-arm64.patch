@@ -36,7 +36,9 @@ Online co-op (Epic) is not part of this build.
  project/src/coop_menu.cpp        |  5 +++
  project/src/discord_presence.cpp |  1 +
  project/src/main.cpp             | 19 ++++++++-
+ project/src/music_player.cpp     |  6 +++
  project/src/native_shadow.inc    |  2 +-
+ project/src/native_tex.inc       |  4 ++
  project/src/online_integrity.cpp | 13 ++++++
  project/src/online_players.cpp   |  3 ++
  project/src/perf_monitor.cpp     |  1 +
@@ -46,7 +48,7 @@ Online co-op (Epic) is not part of this build.
  project/src/stubs.cpp            | 17 +++++---
  project/src/wml/mod_loader.cpp   | 20 ++++++---
  project/src/world_studio_off.cpp | 19 +++++++++
- 15 files changed, 220 insertions(+), 31 deletions(-)
+ 17 files changed, 230 insertions(+), 31 deletions(-)
  create mode 100644 project/src/sr_port.h
  create mode 100644 project/src/world_studio_off.cpp
 
@@ -315,6 +317,21 @@ index 7413a03..834bad1 100644
          }).detach();
          if (runtime_ && runtime_->kernel_state()) {
              runtime_->kernel_state()->TerminateTitle();
+diff --git a/project/src/music_player.cpp b/project/src/music_player.cpp
+index 702532d..ed63c95 100644
+--- a/project/src/music_player.cpp
++++ b/project/src/music_player.cpp
+@@ -273,4 +273,10 @@ void MusicUpdate(PPCContext& ctx, uint8_t* base) {
+   if (frame.ctx.r3.u32 == 0 && state == 0) PPC_STORE_U32(kMp3State, 0);
+ }
+ }  // namespace sr
++#else
++// The MP3 player plays songs through Windows MCI; elsewhere the phone's
++// player keeps the game's own behaviour.
++namespace sr {
++void MusicUpdate(PPCContext&, uint8_t*) {}
++}  // namespace sr
+ #endif
 diff --git a/project/src/native_shadow.inc b/project/src/native_shadow.inc
 index 8b2455c..1324b73 100644
 --- a/project/src/native_shadow.inc
@@ -328,6 +345,22 @@ index 8b2455c..1324b73 100644
  namespace native_shadow {
  using u8 = uint8_t; using u16 = uint16_t; using u32 = uint32_t; using u64 = uint64_t; using s16 = int16_t; using s32 = int32_t; using s64 = int64_t;
  inline u8* G(u8* b, u32 a) { return b + a + REX_PHYS_HOST_OFFSET(a); }
+diff --git a/project/src/native_tex.inc b/project/src/native_tex.inc
+index c37604d..7d920c4 100644
+--- a/project/src/native_tex.inc
++++ b/project/src/native_tex.inc
+@@ -19,7 +19,11 @@
+ // restore of the touched regions) and compares ("NATIVE TEX VERIFY").
+ #include <climits>
+ #include <cmath>
++#if defined(__x86_64__) || defined(_M_X64)
+ #include <emmintrin.h>
++#else
++#include <simde/x86/sse2.h>
++#endif
+ #include <vector>
+ extern "C" void __imp__sub_8214BE00(PPCContext& ctx, uint8_t* base);
+ extern "C" void __imp__sub_825D0D80(PPCContext& ctx, uint8_t* base);
 diff --git a/project/src/online_integrity.cpp b/project/src/online_integrity.cpp
 index 017fd66..07887ef 100644
 --- a/project/src/online_integrity.cpp

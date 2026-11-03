@@ -23,16 +23,17 @@ build on Linux:
 - xsocket includes netdb.h for getaddrinfo; xgi_live names its
   dependent TranslateVirtual template, which MSVC does not require.
 ---
- include/rex/win32_shims.h             | 34 ++++++++++++++++++++++
+ include/rex/win32_shims.h             | 34 ++++++++++++++++++++
+ src/graphics/command_processor.cpp    |  9 +++++-
  src/graphics/shared_memory.cpp        |  1 +
  src/kernel/xam/apps/xgi_app.cpp       |  1 +
- src/kernel/xam/apps/xgi_live.inc      |  8 +++---
- src/kernel/xam/apps/xlivebase_app.cpp |  7 +++--
- src/kernel/xam/xam_net.cpp            | 25 +++++++++++++---
+ src/kernel/xam/apps/xgi_live.inc      | 10 +++---
+ src/kernel/xam/apps/xlivebase_app.cpp |  7 ++--
+ src/kernel/xam/xam_net.cpp            | 25 ++++++++++++---
  src/system/eos_lan_off.cpp            |  4 ++-
- src/system/online_identity.cpp        | 41 +++++++++++++++++++++++++++
+ src/system/online_identity.cpp        | 46 +++++++++++++++++++++++++++
  src/system/xsocket.cpp                |  1 +
- 9 files changed, 110 insertions(+), 12 deletions(-)
+ 10 files changed, 124 insertions(+), 14 deletions(-)
  create mode 100644 include/rex/win32_shims.h
 
 diff --git a/include/rex/win32_shims.h b/include/rex/win32_shims.h
@@ -75,6 +76,34 @@ index 0000000..1be04a2
 +
 +using SOCKET = int;
 +#endif
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index c53217f..320caed 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -18,7 +18,14 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#if defined(__x86_64__) || defined(_M_X64)
+ #include <immintrin.h>
++#define REX_CPU_RELAX() _mm_pause()
++#elif defined(__aarch64__) || defined(_M_ARM64)
++#define REX_CPU_RELAX() __asm__ __volatile__("yield")
++#else
++#define REX_CPU_RELAX() ((void)0)
++#endif
+ #include <functional>
+ #include <future>
+ #include <memory>
+@@ -695,7 +702,7 @@ void CommandProcessor::WorkerThreadMain() {
+       PrepareForWait();
+       const uint32_t spin = CpIdleSpin();
+       for (uint32_t i = 0; i < spin && !has_work(); ++i) {
+-        _mm_pause();
++        REX_CPU_RELAX();
+       }
+       while (!has_work()) {
+         g_cp_sleeping.store(true, std::memory_order_seq_cst);
 diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
 index d57fbbe..b69d7af 100644
 --- a/src/graphics/shared_memory.cpp
@@ -100,7 +129,7 @@ index 0353440..448eb3b 100644
  
  // Online layer trace (only with xam_signed_in_to_live): each XGI / XLiveBase
 diff --git a/src/kernel/xam/apps/xgi_live.inc b/src/kernel/xam/apps/xgi_live.inc
-index 8374e16..13a24bb 100644
+index 8374e16..1ce6672 100644
 --- a/src/kernel/xam/apps/xgi_live.inc
 +++ b/src/kernel/xam/apps/xgi_live.inc
 @@ -290,7 +290,7 @@ uint32_t FillSearchResults(Mem* memory, uint32_t results_ptr, uint32_t buffer_si
@@ -121,6 +150,15 @@ index 8374e16..13a24bb 100644
    std::memset(base, 0, buffer_size);
    uint32_t count = 0;
    uint32_t tail = buffer_size;  // extra arrays grow down from the end
+@@ -461,7 +461,7 @@ int LiveSessionPublic(const uint8_t kid[8]) {
+ // to the one with more players, and between two lone hosts only the one with
+ // the higher session id moves, so exactly one of them does. It joins the way
+ // an accepted invite does. 1 = a join was started.
+-extern "C" __declspec(dllexport) int SrMatchmakingMerge() {
++extern "C" REX_SR_EXPORT int SrMatchmakingMerge() {
+   uint8_t mine[60];
+   std::map<uint32_t, uint32_t> ctx;
+   bool alone = false;
 @@ -548,7 +548,7 @@ extern "C" __declspec(dllexport) int SrMatchmakingMerge() {
  //   <players>|<max players>|<0 = in the lobby (joinable), 1 = a match is running,
  //   2 = searching for players / anything else (joins only work in the lobby)>
@@ -273,7 +311,7 @@ index cb3fee7..2d06f4e 100644
  #define SR_EXPORT extern "C"
  #endif
 diff --git a/src/system/online_identity.cpp b/src/system/online_identity.cpp
-index 3756634..65fd9ec 100755
+index 3756634..2847f5a 100755
 --- a/src/system/online_identity.cpp
 +++ b/src/system/online_identity.cpp
 @@ -26,6 +26,7 @@
@@ -368,7 +406,23 @@ index 3756634..65fd9ec 100755
      const std::string key = "saintsreborn-xuid|" + id + "|" + std::string(pc, pc_n) + "|" + std::string(user, user_n);
      uint64_t h = 1469598103934665603ull;
      for (char c : key) { h ^= uint8_t(c); h *= 1099511628211ull; }
-@@ -342,6 +377,7 @@ namespace rex::system::online {
+@@ -308,10 +343,15 @@ const std::string& StatsKey() {
+     std::string k = ReadSmallFile("gangs_key.txt");
+     if (k.size() >= 32) return k;
+     uint8_t rnd[20] = {};
++#ifdef _WIN32
+     if (BCryptGenRandom(nullptr, rnd, sizeof(rnd), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+       const uint64_t t = GetTickCount64() ^ (uint64_t(GetCurrentProcessId()) << 32);
+       std::memcpy(rnd, &t, 8);
+     }
++#else
++    std::random_device rd;
++    for (auto& b : rnd) b = uint8_t(rd());
++#endif
+     k = Hex(rnd, sizeof(rnd));  // 40 hex digits, like the gangs bridge
+     if (FILE* f = std::fopen("gangs_key.txt", "wb")) {
+       std::fwrite(k.data(), 1, k.size(), f);
+@@ -342,6 +382,7 @@ namespace rex::system::online {
  bool LiveStatsPost(const std::string& path, const std::string& name, const std::string& body, std::string& reply,
                     int timeout_ms) {
    reply.clear();
@@ -376,7 +430,7 @@ index 3756634..65fd9ec 100755
    const std::string& server = StatsServer();
    if (server.empty()) return false;
    const std::wstring wurl(server.begin(), server.end());
-@@ -394,6 +430,11 @@ bool LiveStatsPost(const std::string& path, const std::string& name, const std::
+@@ -394,6 +435,11 @@ bool LiveStatsPost(const std::string& path, const std::string& name, const std::
    }
    WinHttpCloseHandle(c);
    return ok;
